@@ -74,14 +74,21 @@ Sur le VPS :
 cd /opt/replique
 docker compose up -d --build
 docker compose exec replique python -m backend.owner_provider
+```
+
+Choisir **un modèle affiché par cette commande**, écrire `REPLIQUE_MODEL=son-slug`
+dans le `.env` privé du VPS, puis recréer le service et vérifier sa santé :
+
+```sh
+docker compose up -d --force-recreate
 curl -fsS -H 'Host: replique.duckdns.org' http://127.0.0.1:18081/api/health
 ```
 
 La commande `backend.owner_provider` liste uniquement les modèles accessibles
 au compte ; elle vérifie le renouvellement de la session et une connexion
-réelle à OpenAI, sans afficher les jetons. Par défaut, Réplique choisit le
-premier modèle du catalogue ; pour en fixer un, mettre `REPLIQUE_MODEL=slug`
-dans le `.env` privé du VPS puis recréer le conteneur. Si le catalogue ou la
+réelle à OpenAI, sans afficher les jetons. Le service exige maintenant un modèle
+fixé par le propriétaire et vérifie son éligibilité à chaque génération. Avant
+ce choix, le contrôle de santé reste volontairement en erreur. Si le catalogue ou la
 génération est refusé, corriger l’autorisation du compte avant d’inviter des
 visiteurs. Un `GET /api/health` sain vérifie le fichier chiffré et sa clé,
 mais ne garantit pas à lui seul qu’OpenAI acceptera une génération.
@@ -115,3 +122,103 @@ prestataire de paiement, obtenir une base fournisseur autorisée et vérifier
 les conditions d’utilisation d’OpenAI pour ce cas d’usage. Le forfait personnel
 peut être limité ou refusé ; la réussite de tests ne garantit pas qu’il couvre
 un SaaS payant.
+
+## Limites et suivi privé
+
+Avec `deploy/nginx-https.conf`, Nginx limite par adresse IP les connexions à
+5/minute, les générations et l’OCR à 12/minute, avec de petites rafales. Le
+backend borne aussi chaque compte à 6 demandes de génération et 10 OCR par
+minute. Un dépassement renvoie HTTP 429 ; les échecs de mot de passe ne
+verrouillent plus le compte d’une victime. Vérifier `nginx -t` avant de recharger
+la configuration, puis vérifier une erreur 429 contrôlée en environnement de
+test. Ajuster ces valeurs après avoir mesuré la charge réelle du KVM 2.
+
+Les générations écrivent seulement l’heure, le fournisseur, une catégorie de
+résultat et la durée dans `data/operations.sqlite3`. Aucun texte de conversation,
+e-mail, identifiant de compte ou jeton n’y est enregistré. Les événements de
+plus de 30 jours sont supprimés lors du prochain enregistrement. Lire les
+comptages d’échecs, les limites OpenAI et la médiane/p95 des succès :
+
+```sh
+docker compose exec replique python -m backend.operations report --days 7
+```
+
+Le relevé est local et agrégé ; il ne remplace pas une alerte externe. Une
+limite `quota` répétée ou un temps p95 trop long doit interrompre l’invitation
+de nouveaux testeurs jusqu’au diagnostic.
+
+## Sauvegarde et restauration vérifiée
+
+Créer un dossier privé et un instantané cohérent de SQLite. Le snapshot contient
+**la base des comptes, la session propriétaire et sa clé** : son accès équivaut
+à celui du compte propriétaire. Le transférer hors du VPS vers un stockage
+chiffré contrôlé par vous, puis supprimer la copie temporaire du VPS. Ne jamais
+le placer dans Git, dans l’image Docker ou sur un espace public.
+
+```sh
+cd /opt/replique
+docker compose exec replique sh -c 'umask 077; mkdir -p /data/backups'
+snapshot="snapshot-$(date -u +%Y%m%dT%H%M%SZ)"
+docker compose exec replique python -m backend.backup create "/data/backups/$snapshot"
+docker compose exec replique python -m backend.backup drill "/data/backups/$snapshot"
+```
+
+`drill` restaure dans un dossier privé temporaire, compare les trois fichiers
+et l’efface. Faire ce contrôle après chaque sauvegarde, puis transférer le
+snapshot. Par exemple, depuis votre ordinateur privé, copier le dossier
+`/opt/replique/data/backups/snapshot-...` avec `scp -r` vers un disque chiffré
+hors du dépôt, puis ne garder sur le VPS que les copies nécessaires. Conserver
+aussi le slug `REPLIQUE_MODEL` pour reconstruire le `.env`.
+
+En cas de perte du VPS, récupérer ce dossier, arrêter Réplique et créer des
+dossiers `data` et `secrets` vides et privés appartenant à UID 10001. Restaurer
+hors ligne avec la même image, en adaptant `SNAPSHOT` au chemin absolu du dossier
+de sauvegarde récupéré :
+
+```sh
+cd /opt/replique
+docker compose stop replique
+snapshot_dir=/chemin/prive/snapshot-YYYYMMDDTHHMMSSZ
+mkdir -p data secrets
+chown -R 10001:10001 "$snapshot_dir"
+chmod 700 "$snapshot_dir"
+chmod 600 "$snapshot_dir"/*
+chown 10001:10001 data secrets
+chmod 700 data secrets
+docker compose build replique
+docker run --rm --network none --user 10001:10001 \
+  -v "$PWD/data:/data" -v "$PWD/secrets:/secrets" -v "$snapshot_dir:/snapshot:ro" \
+  replique:local python -m backend.backup restore /snapshot /data /secrets/credential.key
+docker compose up -d
+```
+
+La restauration refuse d’écraser des fichiers existants ; en cas de récupération
+sur un VPS encore rempli, conserver d’abord ses anciens fichiers hors de ces
+dossiers. Vérifier `GET /api/health`, puis une génération fictive et le solde
+d’un compte avant de rouvrir le service.
+
+## Mesurer la bêta avec deux personnes
+
+Faire tester le même modèle fixé à deux personnes invitées. Le corpus
+`backend/evals/conversation_cases.json` contient 15 échanges fictifs ; chaque
+testeur dispose de 20 crédits. Créer une feuille de notation sans stocker les
+réponses ni les conversations :
+
+```sh
+python -m backend.quality_review template --model SLUG --output /chemin/prive/replique-review.csv
+```
+
+Chaque testeur lit les trois réponses pour chaque cas et note de 1 à 5 la
+fidélité aux faits, le naturel, la différence utile des variantes et le respect
+des limites. Il marque `passes_case` avec `yes` ou `no` après lecture des
+critères `must` / `must_not` du corpus. Remplir toutes les lignes puis calculer :
+
+```sh
+python -m backend.quality_review report --input /chemin/prive/replique-review.csv
+docker compose exec replique python -m backend.operations report --days 1
+```
+
+Faire quelques demandes en même temps pour observer la file d’attente et le
+p95, sans épuiser le forfait. Ces notes humaines et mesures réelles restent à
+produire avec le compte propriétaire ; les tests automatisés utilisent un
+fournisseur simulé.

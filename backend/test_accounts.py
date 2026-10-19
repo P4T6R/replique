@@ -12,7 +12,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
-from backend.accounts import create_invitation, database, reserve, finish
+from backend.accounts import create_invitation, database, reserve, finish, limit_account
 from backend.app import app
 from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER
 
@@ -102,12 +102,13 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(self.generate().status_code, 502)
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
         ModelHandler.fail = False
-        for remaining in range(19, -1, -1):
-            result = self.generate()
-            self.assertEqual(result.status_code, 200, result.text)
-            self.assertEqual(result.json()["mode"], "local")
-            self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], remaining)
-        self.assertEqual(self.generate().status_code, 402)
+        with patch("backend.accounts.REQUEST_LIMITS", {"generate": 100, "ocr": 10}):
+            for remaining in range(19, -1, -1):
+                result = self.generate()
+                self.assertEqual(result.status_code, 200, result.text)
+                self.assertEqual(result.json()["mode"], "local")
+                self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], remaining)
+            self.assertEqual(self.generate().status_code, 402)
         self.assertEqual(ModelHandler.calls, 21)
 
     def test_public_routes_require_account_origin_and_keep_memory_private(self):
@@ -160,3 +161,38 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 1)
         for reservation in reservations[1:]:
             finish(reservation, False)
+
+    def test_per_account_limit_resets_without_locking_password_login(self):
+        self.register()
+        with database() as db:
+            first = db.execute("SELECT id FROM accounts WHERE email=?", ("first@example.test",)).fetchone()[0]
+        with patch("backend.accounts.time.time", return_value=1_700_000_000):
+            for _ in range(6):
+                limit_account(first, "generate")
+            with self.assertRaises(HTTPException) as rejected:
+                limit_account(first, "generate")
+            self.assertEqual(rejected.exception.status_code, 429)
+            self.assertIn("Retry-After", rejected.exception.headers)
+            for _ in range(10):
+                limit_account(first, "ocr")
+            with self.assertRaises(HTTPException) as rejected_ocr:
+                limit_account(first, "ocr")
+            self.assertEqual(rejected_ocr.exception.status_code, 429)
+        with patch("backend.accounts.time.time", return_value=1_700_000_061):
+            limit_account(first, "generate")
+        for _ in range(6):
+            self.assertEqual(self.client.post("/api/account/login", headers=HEADERS,
+                json={"email": "first@example.test", "password": "wrong password"}).status_code, 401)
+        self.assertEqual(self.client.post("/api/account/login", headers=HEADERS,
+            json={"email": "first@example.test", "password": "a long beta password"}).status_code, 200)
+
+    def test_generation_route_enforces_account_limit_before_provider_call(self):
+        self.register()
+        with patch("backend.accounts.REQUEST_LIMITS", {"generate": 2, "ocr": 10}):
+            self.assertEqual(self.generate().status_code, 200)
+            self.assertEqual(self.generate().status_code, 200)
+            blocked = self.generate()
+        self.assertEqual(blocked.status_code, 429)
+        self.assertIn("Retry-After", blocked.headers)
+        self.assertEqual(ModelHandler.calls, 2)
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 18)

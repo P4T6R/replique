@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unicodedata
 import warnings
 from dataclasses import dataclass
@@ -27,9 +28,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 from .oauth import router as auth_router, COOKIE, same_origin, enabled as oauth_enabled
-from .accounts import router as account_router, public_origin, request_account, reserve, finish
+from .accounts import router as account_router, public_origin, request_account, reserve, finish, limit_account
 from .chatgpt_provider import stream_text
-from .owner_provider import stored_owner, generate_text as owner_generate_text
+from .owner_provider import OwnerProviderError, stored_owner, generate_text as owner_generate_text
+from .operations import record_generation
 from .memory import router as memory_router, select_context
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -304,6 +306,8 @@ async def health():
         if not public_origin():
             raise HTTPException(503, "Le mode hébergé exige une origine publique HTTPS.")
         await run_in_threadpool(stored_owner)
+        if not config.model:
+            raise HTTPException(503, "Le modèle du service doit être fixé avant son ouverture.")
     chatgpt_ocr = config.mode == "chatgpt" and oauth_enabled()
     return {"mode": "hosted" if config.mode == "owner_chatgpt" else config.mode, "ocr_available": bool(langs) or chatgpt_ocr, "ocr_languages": list(langs), "provider": config.provider}
 
@@ -563,6 +567,8 @@ async def generate(request: GenerateRequest, http_request: Request):
         raise HTTPException(503, "Le site public exige un fournisseur hébergé.")
     if config.mode == "owner_chatgpt" and not public_origin():
         raise HTTPException(503, "Le mode hébergé exige une origine publique HTTPS.")
+    if account_id:
+        limit_account(account_id, "generate")
     if public_origin() and request.use_memory:
         raise HTTPException(403, "La mémoire personnelle sera disponible après son isolation par compte.")
     if config.mode == "demo" and request.conversation not in DEMO_CONVERSATIONS:
@@ -594,12 +600,14 @@ async def generate(request: GenerateRequest, http_request: Request):
             raise HTTPException(502, "La réponse ChatGPT n’a pas le format attendu. Aucune proposition n’est affichée.") from None
         return GenerateResponse(mode="chatgpt", memory_used=memory_used, notice="Propositions générées avec votre forfait ChatGPT. Vérifiez les faits avant de copier.", insight=answer.insight, boundary=False,
             replies=[Reply(id=str(i + 1), title=reply.title, text=reply.text, why=reply.why) for i, reply in enumerate(answer.replies)])
+    started = time.monotonic()
     slot_acquired = False
     if config.mode in {"local", "owner_chatgpt"}:
         try:
             await asyncio.wait_for(local_model_slot.acquire(), timeout=5)
             slot_acquired = True
         except asyncio.TimeoutError:
+            record_generation(config.mode, "busy", int((time.monotonic() - started) * 1000))
             raise HTTPException(503, "Le service de génération est occupé. Réessayez dans un instant.") from None
     try:
         reservation = reserve(account_id) if account_id else None
@@ -616,12 +624,19 @@ async def generate(request: GenerateRequest, http_request: Request):
                     insight=answer.insight, boundary=False, replies=[Reply(id=str(i + 1), title=reply.title, text=reply.text, why=reply.why) for i, reply in enumerate(answer.replies)])
             else:
                 result = await live_answer(request, config, memory_context)
-        except BaseException:
+        except BaseException as error:
             if reservation:
                 finish(reservation, False)
+            if config.mode in {"owner_chatgpt", "local"}:
+                outcome = (error.reason if isinstance(error, OwnerProviderError) else "cancelled"
+                           if isinstance(error, asyncio.CancelledError) else "invalid_response"
+                           if isinstance(error, HTTPException) and error.status_code == 502 else "provider")
+                record_generation(config.mode, outcome, int((time.monotonic() - started) * 1000))
             raise
         if reservation:
             finish(reservation, True)
+        if config.mode in {"owner_chatgpt", "local"}:
+            record_generation(config.mode, "success", int((time.monotonic() - started) * 1000))
     finally:
         if slot_acquired:
             local_model_slot.release()
@@ -722,7 +737,7 @@ def extract_ocr(data: bytes, mime: str) -> dict:
 async def ocr(request: Request, file: UploadFile = File(...), consent: bool = Form(False), model: str = Form("")):
     try:
         if public_origin():
-            request_account(request)
+            limit_account(request_account(request)["id"], "ocr")
         use_chatgpt = settings().mode == "chatgpt"
         if use_chatgpt:
             same_origin(request)

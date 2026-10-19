@@ -1,4 +1,4 @@
-"""Private beta accounts and metered local-model generations.
+"""Private beta accounts and metered hosted generations.
 
 Invitations are single-use so a visitor cannot reset their trial by creating
 unlimited accounts. Payment activation must be supplied by a verified provider
@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 TRIAL_CREDITS = 20
 SESSION_SECONDS = 30 * 24 * 3600
 RESERVATION_SECONDS = 300
+REQUEST_LIMITS = {"generate": 6, "ocr": 10}  # per account, per fixed minute
 COOKIE = "replique_account"
 router = APIRouter(prefix="/api/account")
 
@@ -62,9 +63,7 @@ def database(write: bool = False):
                 id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE,
                 salt BLOB NOT NULL, password_hash BLOB NOT NULL,
                 used INTEGER NOT NULL DEFAULT 0 CHECK(used >= 0),
-                paid_until INTEGER NOT NULL DEFAULT 0,
-                failed_logins INTEGER NOT NULL DEFAULT 0,
-                locked_until INTEGER NOT NULL DEFAULT 0
+                paid_until INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS invitations (
                 code_hash TEXT PRIMARY KEY, used_by TEXT REFERENCES accounts(id)
@@ -76,6 +75,11 @@ def database(write: bool = False):
             CREATE TABLE IF NOT EXISTS reservations (
                 id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
                 expires_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS request_limits (
+                account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                action TEXT NOT NULL, window_start INTEGER NOT NULL, calls INTEGER NOT NULL,
+                PRIMARY KEY (account_id, action)
             );
         """)
         if write:
@@ -180,18 +184,14 @@ def register(body: Registration):
 @router.post("/login")
 def login(body: Login):
     email = normalize_email(body.email)
-    with database(True) as db:
+    with database() as db:
         account = db.execute("SELECT * FROM accounts WHERE email=?", (email,)).fetchone()
-        if account is None or account["locked_until"] > int(time.time()):
-            raise HTTPException(401, "Identifiants incorrects ou compte temporairement verrouillé.")
-        candidate = password_digest(body.password, account["salt"])
-        if not secrets.compare_digest(candidate, account["password_hash"]):
-            failures = account["failed_logins"] + 1
-            db.execute("UPDATE accounts SET failed_logins=?,locked_until=? WHERE id=?",
-                       (failures, int(time.time()) + 900 if failures >= 5 else 0, account["id"]))
-            db.commit()
-            raise HTTPException(401, "Identifiants incorrects ou compte temporairement verrouillé.")
-        db.execute("UPDATE accounts SET failed_logins=0,locked_until=0 WHERE id=?", (account["id"],))
+    if account is None:
+        raise HTTPException(401, "Identifiants incorrects.")
+    candidate = password_digest(body.password, account["salt"])
+    if not secrets.compare_digest(candidate, account["password_hash"]):
+        raise HTTPException(401, "Identifiants incorrects.")
+    with database(True) as db:
         token = issue_session(db, account["id"])
     return session_response(token, account)
 
@@ -220,6 +220,23 @@ def reserve(account_id: str) -> str:
         reservation = str(uuid4())
         db.execute("INSERT INTO reservations VALUES (?,?,?)", (reservation, account_id, now + RESERVATION_SECONDS))
     return reservation
+
+
+def limit_account(account_id: str, action: str) -> None:
+    """Bound expensive public requests without locking a victim's account."""
+    maximum = REQUEST_LIMITS[action]
+    now = int(time.time())
+    window = now - now % 60
+    with database(True) as db:
+        previous = db.execute("SELECT window_start,calls FROM request_limits WHERE account_id=? AND action=?",
+                              (account_id, action)).fetchone()
+        calls = previous["calls"] if previous and previous["window_start"] == window else 0
+        if calls >= maximum:
+            raise HTTPException(429, "Trop de demandes. Réessayez dans un instant.",
+                                headers={"Retry-After": str(60 - now % 60)})
+        db.execute("INSERT INTO request_limits (account_id,action,window_start,calls) VALUES (?,?,?,?) "
+                   "ON CONFLICT(account_id,action) DO UPDATE SET window_start=excluded.window_start,calls=excluded.calls",
+                   (account_id, action, window, calls + 1))
 
 
 def finish(reservation: str, success: bool) -> None:

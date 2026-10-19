@@ -19,6 +19,9 @@ type AuthStatus = {
 type Model = { slug: string; display_name: string };
 const usageUrl = "https://chatgpt.com/settings/usage";
 const authHeaders = { "X-Replique-Request": "1" };
+class HttpRequestError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 type Reply = { id: string; title: string; text: string; why: string };
 type Result = {
   mode: string;
@@ -53,17 +56,19 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     );
   }
   if (!r.ok)
-    throw new Error(
+    throw new HttpRequestError(
       typeof data.detail === "string"
         ? data.detail
         : typeof data.detail?.message === "string"
           ? data.detail.message
           : "Les informations envoyées ne sont pas valides. Vérifiez les champs.",
+      r.status,
     );
   return data;
 }
 function App() {
   const [account, setAccount] = useState<AccountStatus | null>(null);
+  const [accountError, setAccountError] = useState("");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -108,8 +113,19 @@ function App() {
       .catch(error => setConnection((error as Error).message));
   };
   async function refreshAccount() {
-    try { setAccount(await request<AccountStatus>("/api/account/status")); }
-    catch { setAccount(null); setResult(null); setConversation(""); }
+    try {
+      setAccount(await request<AccountStatus>("/api/account/status"));
+      setAccountError("");
+    } catch (error) {
+      if (error instanceof HttpRequestError && error.status === 401) {
+        setAccount(null);
+        setResult(null);
+        setConversation("");
+        setAccountError("");
+      } else {
+        setAccountError("Impossible d’actualiser votre solde. Votre conversation est conservée ; réessayez.");
+      }
+    }
   }
   async function refreshAuth() {
     const epoch = ++authEpoch.current;
@@ -194,6 +210,7 @@ function App() {
   function updateConversation(value: string) {
     setConversation(value);
     setConfirmed(false);
+    setConsent(false);
     setResult(null);
     setError("");
   }
@@ -261,7 +278,6 @@ function App() {
         setConsent(false);
         setTimeout(() => results.current?.focus(), 0);
       }
-      if (isHosted) void refreshAccount();
     } catch (e) {
       if (
         id === generation.current &&
@@ -380,7 +396,7 @@ function App() {
             {connection} <button onClick={connect}>Réessayer</button>
           </div>
         )}
-        {isHosted ? <AccountPanel account={account} provider={health?.mode === "hosted" ? "openai" : "local"} onChange={next => { reset(); setAccount(next); }} /> : health && <details className="account-disclosure" open={!!authError || auth?.status === "reauth_required"}><summary><span className="account-summary-icon" aria-hidden="true">◎</span><span>{auth?.status === "connected" ? "Votre compte ChatGPT est connecté" : "Envie d’utiliser vos propres conversations ?"}<small>{auth?.status === "connected" ? "Compte, modèles et utilisation" : "Connexion ChatGPT et état du service"}</small></span><span className="disclosure-plus" aria-hidden="true">＋</span></summary>
+        {isHosted ? <><AccountPanel account={account} provider={health?.mode === "hosted" ? "openai" : "local"} onChange={next => { reset(); setAccount(next); setAccountError(""); }} />{accountError && <p className="error" role="alert">{accountError} <button type="button" onClick={() => void refreshAccount()}>Réessayer</button></p>}</> : health && <details className="account-disclosure" open={!!authError || auth?.status === "reauth_required"}><summary><span className="account-summary-icon" aria-hidden="true">◎</span><span>{auth?.status === "connected" ? "Votre compte ChatGPT est connecté" : "Envie d’utiliser vos propres conversations ?"}<small>{auth?.status === "connected" ? "Compte, modèles et utilisation" : "Connexion ChatGPT et état du service"}</small></span><span className="disclosure-plus" aria-hidden="true">＋</span></summary>
         <section className="account-panel" aria-labelledby="account-title" aria-busy={authBusy}>
           <div>
             <div className="eyebrow">VOTRE COMPTE</div>
@@ -509,6 +525,7 @@ function App() {
               onChange={(e) => {
                 setIntent(e.target.value);
                 setResult(null);
+                setConsent(false);
               }}
             >
               {intentions.map((i) => (
@@ -531,6 +548,7 @@ function App() {
                       onChange={() => {
                         setTone(t);
                         setResult(null);
+                        setConsent(false);
                       }}
                     />
                     {t}
@@ -540,9 +558,9 @@ function App() {
             </fieldset>
             <details className="personalize"><summary>Affiner ma façon d’écrire <span aria-hidden="true">＋</span></summary><div className="personalize-body">
             <label className="field-label" htmlFor="locale">Le contexte linguistique</label>
-            <select id="locale" disabled={!!busy} value={locale} onChange={(e) => { setLocale(e.target.value); setResult(null); }}><option value="fr_neutre">Français neutre</option><option value="afrique_ouest">Français · Afrique de l’Ouest</option><option value="burkina_faso">Français · contexte Burkina Faso</option></select>
+            <select id="locale" disabled={!!busy} value={locale} onChange={(e) => { setLocale(e.target.value); setResult(null); setConsent(false); }}><option value="fr_neutre">Français neutre</option><option value="afrique_ouest">Français · Afrique de l’Ouest</option><option value="burkina_faso">Français · contexte Burkina Faso</option></select>
             <label className="field-label" htmlFor="familiarity">Le degré de familiarité</label>
-            <select id="familiarity" disabled={!!busy} value={familiarity} onChange={(e) => { setFamiliarity(e.target.value); setResult(null); }}><option value="neutre">Courant, sans familiarité ajoutée</option><option value="familier">Familier, si l’échange s’y prête</option></select>
+            <select id="familiarity" disabled={!!busy} value={familiarity} onChange={(e) => { setFamiliarity(e.target.value); setResult(null); setConsent(false); }}><option value="neutre">Courant, sans familiarité ajoutée</option><option value="familier">Familier, si l’échange s’y prête</option></select>
             <p className="preference-help">Votre façon d’écrire passe avant les expressions régionales. Aucun accent ni argot forcé.</p>
             <label className="field-label" htmlFor="style">
               Votre façon d’écrire <span>facultatif</span>
@@ -556,6 +574,7 @@ function App() {
               onChange={(e) => {
                 setStyle(e.target.value);
                 setResult(null);
+                setConsent(false);
               }}
               placeholder="Ex. Des phrases courtes, pas de surnoms. Je dis souvent « ça marche »."
             />
@@ -567,6 +586,7 @@ function App() {
                 onChange={(e) => {
                   setEmoji(e.target.checked);
                   setResult(null);
+                  setConsent(false);
                 }}
               />
               <span>Un emoji, si le contexte s’y prête</span>

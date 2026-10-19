@@ -32,9 +32,9 @@ L’adaptateur de fournisseur compatible Chat Completions est implémenté et te
 ## Installation locale
 
 Pour l'installation Docker sur un serveur, voir [DOCKER.md](DOCKER.md).
-Le mode ChatGPT de cette image s'utilise depuis un navigateur local via un
-tunnel SSH ; le domaine public ne peut pas servir directement de callback OAuth
-à ce flux OpenAI.
+La bêta hébergée utilise une session créée par le propriétaire sur son ordinateur
+privé puis transférée chiffrée au VPS ; aucun tunnel SSH permanent n’est requis
+pour les visiteurs. Le callback OAuth historique reste limité à `127.0.0.1`.
 
 Prérequis : Python 3.11+, Node.js 22.12+ ou 24, npm. Tesseract est facultatif pour l’OCR. Installez-le depuis le gestionnaire officiel de votre système, avec les langues française et anglaise si possible.
 

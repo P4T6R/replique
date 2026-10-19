@@ -16,6 +16,8 @@ import httpx
 from backend.accounts import create_invitation
 from backend.app import app
 from backend.oauth import Session, load_persistent_session, oauth, save_persistent_session
+from backend.operations import report
+from backend.owner_provider import unavailable
 from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER
 
 ORIGIN = "https://replique.duckdns.org"
@@ -23,6 +25,12 @@ HEADERS = {"Origin": ORIGIN, "X-Replique-Request": "1"}
 
 
 class OwnerProviderTests(unittest.TestCase):
+    def test_stream_limit_event_has_private_quota_category(self):
+        error = HTTPException(502, {"code": "subscription_sharing_usage_limit_exceeded"})
+        classified = unavailable(error)
+        self.assertEqual(classified.reason, "quota")
+        self.assertEqual(classified.status_code, 503)
+
     def setUp(self):
         self.private = tempfile.TemporaryDirectory()
         self.key = Path(self.private.name) / "credential.key"
@@ -31,7 +39,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.environment = patch.dict(os.environ, {
             "REPLIQUE_MODE": "owner_chatgpt", "REPLIQUE_PUBLIC_ORIGIN": ORIGIN,
             "REPLIQUE_OAUTH_ENABLED": "1", "REPLIQUE_DATA_DIR": self.private.name,
-            "REPLIQUE_CREDENTIAL_KEY_FILE": str(self.key), "REPLIQUE_MODEL": "",
+            "REPLIQUE_CREDENTIAL_KEY_FILE": str(self.key), "REPLIQUE_MODEL": "owner-model",
         })
         self.environment.start()
         self.previous = (oauth.session, oauth.error, oauth.lock)
@@ -70,9 +78,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/auth/status").status_code, 403)
         self.assertEqual(self.generate().status_code, 401)
         self.register()
-        with patch("backend.owner_provider.catalog", new_callable=AsyncMock,
-                   return_value=[{"slug": "owner-model", "display_name": "Owner model"}]), \
-             patch("backend.owner_provider.stream_text", new_callable=AsyncMock,
+        with patch("backend.owner_provider.stream_text", new_callable=AsyncMock,
                    return_value=json.dumps(PROVIDER_ANSWER)) as stream:
             response = self.generate()
         self.assertEqual(response.status_code, 200, response.text)
@@ -80,10 +86,20 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertNotIn("private-owner@example.test", response.text)
         self.assertEqual(stream.await_args.args[0:2], ("owner-browser", "owner-model"))
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
-        with patch("backend.owner_provider.catalog", new_callable=AsyncMock,
+        with patch("backend.owner_provider.stream_text", new_callable=AsyncMock,
                    side_effect=HTTPException(429, "quota reached")):
             self.assertEqual(self.generate().status_code, 503)
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
+        self.assertEqual(report(1)["outcomes"], {"success": 1, "quota": 1})
+
+    def test_server_model_must_be_selected_before_opening(self):
+        self.provision()
+        with patch.dict(os.environ, {"REPLIQUE_MODEL": ""}):
+            self.assertEqual(self.client.get("/api/health").status_code, 503)
+            self.register()
+            self.assertEqual(self.generate().status_code, 503)
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
+        self.assertEqual(report(1)["outcomes"], {"configuration": 1})
 
     def test_codex_auth_file_does_not_activate_public_provider(self):
         (Path(self.private.name) / "auth.json").write_text('{"tokens":{"access_token":"fake"}}')

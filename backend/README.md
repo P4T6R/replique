@@ -1,6 +1,6 @@
 # Réplique — API locale
 
-Backend Python 3.11+ / FastAPI. Aucun compte, base de données ou service externe n’est nécessaire au mode démo. Ce prototype est destiné à un usage local, pas à un déploiement public.
+Backend Python 3.11+ / FastAPI. Aucun compte, base de données ou service externe n’est nécessaire au mode démo local. Pour la bêta publique sur invitation et ses protections, voir [`../HOSTED.md`](../HOSTED.md).
 
 ## Démarrer
 
