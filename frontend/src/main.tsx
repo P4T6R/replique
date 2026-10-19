@@ -2,8 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import { MemoryPanel, SaveMemory, memoryRequest, type MemoryPreview } from "./Memory";
+import { AccountPanel, type AccountStatus } from "./Account";
 type Health = {
-  mode: "demo" | "live" | "chatgpt";
+  mode: "demo" | "live" | "chatgpt" | "local" | "hosted";
   ocr_available: boolean;
   ocr_languages: string[];
   provider: string | null;
@@ -62,6 +63,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   return data;
 }
 function App() {
+  const [account, setAccount] = useState<AccountStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -98,16 +100,17 @@ function App() {
     generation = useRef(0),
     abort = useRef<AbortController | null>(null),
     results = useRef<HTMLElement>(null);
+  const isHosted = health?.mode === "local" || health?.mode === "hosted";
   const connect = () => {
     setConnection("");
     request<Health>("/api/health")
-      .then(setHealth)
-      .catch(() =>
-        setConnection(
-          "Serveur indisponible. Lancez l’API pour utiliser l’atelier.",
-        ),
-      );
+      .then(data => { setHealth(data); if (data.mode === "local" || data.mode === "hosted") void refreshAccount(); else void refreshAuth(); })
+      .catch(error => setConnection((error as Error).message));
   };
+  async function refreshAccount() {
+    try { setAccount(await request<AccountStatus>("/api/account/status")); }
+    catch { setAccount(null); setResult(null); setConversation(""); }
+  }
   async function refreshAuth() {
     const epoch = ++authEpoch.current;
     setModels([]);
@@ -181,7 +184,6 @@ function App() {
   }, [welcome]);
   useEffect(() => {
     connect();
-    void refreshAuth();
     const url = new URL(window.location.href);
     if (url.searchParams.has("auth")) {
       url.searchParams.delete("auth");
@@ -215,13 +217,15 @@ function App() {
     setError("");
     setOcrNotice("");
     setNotice(
-      "Session effacée de cet atelier. Votre mémoire de style reste conservée ; utilisez « Effacer toute la mémoire » pour la supprimer. Les fichiers exportés et le presse-papiers restent sur votre appareil. Les données déjà transmises à un fournisseur restent soumises à ses règles de conservation.",
+      isHosted
+        ? "Conversation effacée de cet appareil. Les fichiers déjà exportés restent sur votre appareil."
+        : "Session effacée de cet atelier. Votre mémoire de style reste conservée ; utilisez « Effacer toute la mémoire » pour la supprimer. Les fichiers exportés et le presse-papiers restent sur votre appareil. Les données déjà transmises à un fournisseur restent soumises à ses règles de conservation.",
     );
     if (file.current) file.current.value = "";
   }
   async function generate(e: React.FormEvent) {
     e.preventDefault();
-    if (busy || authBusy || !health || !confirmed || (health.mode === "chatgpt" && (!auth?.sharing || auth.status !== "connected" || !model))) return;
+    if (busy || authBusy || !health || !confirmed || (health.mode === "chatgpt" && (!auth?.sharing || auth.status !== "connected" || !model)) || (isHosted && (!account || (!account.subscription_active && account.trial_remaining === 0)))) return;
     if (useMemory && !memoryPreview) return;
     const id = ++generation.current;
     abort.current?.abort();
@@ -257,6 +261,7 @@ function App() {
         setConsent(false);
         setTimeout(() => results.current?.focus(), 0);
       }
+      if (isHosted) void refreshAccount();
     } catch (e) {
       if (
         id === generation.current &&
@@ -265,6 +270,7 @@ function App() {
         setError((e as Error).message);
     } finally {
       if (id === generation.current) setBusy("");
+      if (isHosted) void refreshAccount();
     }
   }
   async function upload(f: File | undefined) {
@@ -368,13 +374,13 @@ function App() {
           <div><p className="eyebrow">UN MESSAGE PEUT TOUT CHANGER. RESTEZ VOUS-MÊME.</p><h1>Ça se dit.<br /><em>À votre façon.</em><span className="heading-star" aria-hidden="true">✳</span></h1></div>
           <div className="intro-aside"><p>Vous avez le fond.<br />Trouvons les mots.</p><span>Un peu de recul, trois pistes.<br />Et toujours le dernier mot pour vous.</span></div>
         </section>
-        <div className="atelier-bar"><span className="eyebrow">VOTRE ESPACE POUR RÉPONDRE</span><span className={"mode " + (health && health.mode !== "demo" ? "live" : "")}><span className="dot" aria-hidden="true" />{health?.mode === "chatgpt" ? "IA · forfait ChatGPT" : health?.mode === "live" ? "IA · fournisseur configuré" : health ? "Démo · exemples préécrits" : "Vérification du service…"}</span></div>
+        <div className="atelier-bar"><span className="eyebrow">VOTRE ESPACE POUR RÉPONDRE</span><span className={"mode " + (health && health.mode !== "demo" ? "live" : "")}><span className="dot" aria-hidden="true" />{health?.mode === "hosted" ? "IA · service Réplique" : health?.mode === "local" ? "IA · modèle sur Réplique" : health?.mode === "chatgpt" ? "IA · forfait ChatGPT" : health?.mode === "live" ? "IA · fournisseur configuré" : health ? "Démo · exemples préécrits" : "Vérification du service…"}</span></div>
         {connection && (
           <div className="error" role="alert">
             {connection} <button onClick={connect}>Réessayer</button>
           </div>
         )}
-        <details className="account-disclosure" open={!!authError || auth?.status === "reauth_required"}><summary><span className="account-summary-icon" aria-hidden="true">◎</span><span>{auth?.status === "connected" ? "Votre compte ChatGPT est connecté" : "Envie d’utiliser vos propres conversations ?"}<small>{auth?.status === "connected" ? "Compte, modèles et utilisation" : "Connexion ChatGPT et état du service"}</small></span><span className="disclosure-plus" aria-hidden="true">＋</span></summary>
+        {isHosted ? <AccountPanel account={account} provider={health?.mode === "hosted" ? "openai" : "local"} onChange={next => { reset(); setAccount(next); }} /> : health && <details className="account-disclosure" open={!!authError || auth?.status === "reauth_required"}><summary><span className="account-summary-icon" aria-hidden="true">◎</span><span>{auth?.status === "connected" ? "Votre compte ChatGPT est connecté" : "Envie d’utiliser vos propres conversations ?"}<small>{auth?.status === "connected" ? "Compte, modèles et utilisation" : "Connexion ChatGPT et état du service"}</small></span><span className="disclosure-plus" aria-hidden="true">＋</span></summary>
         <section className="account-panel" aria-labelledby="account-title" aria-busy={authBusy}>
           <div>
             <div className="eyebrow">VOTRE COMPTE</div>
@@ -400,13 +406,13 @@ function App() {
             <button type="button" className="text-button" disabled={!!busy || authBusy} onClick={() => { connect(); void refreshAuth(); }}>Actualiser la connexion</button>
           </div>
           {authError && <p className="error account-error" role="alert">{authError}</p>}
-        </section></details>
-        <dialog ref={welcomeDialog} className="plan-dialog" onCancel={dismissWelcome} aria-labelledby="plan-title">
+        </section></details>}
+        {health && !isHosted && <dialog ref={welcomeDialog} className="plan-dialog" onCancel={dismissWelcome} aria-labelledby="plan-title">
           <h2 id="plan-title">Vous utilisez votre forfait ChatGPT</h2>
           <p>Les demandes éligibles dans Réplique utilisent votre forfait ChatGPT. Consultez et ajustez vos limites dans les réglages ChatGPT.</p>
           <a href={usageUrl} target="_blank" rel="noopener noreferrer">Gérer l’utilisation ↗</a>
           <button type="button" className="chatgpt-login" onClick={dismissWelcome}>Compris</button>
-        </dialog>
+        </dialog>}
         <div className="workspace">
           <form className="compose" onSubmit={generate}>
             <div className="paper-shell"><div className="context-sheet">
@@ -422,7 +428,7 @@ function App() {
               <button
                 type="button"
                 className="text-button"
-                disabled={!!busy || (health?.mode === "chatgpt" ? auth?.status !== "connected" || !auth.sharing || !model || !ocrConsent : !health?.ocr_available)}
+                disabled={!!busy || (isHosted && !account) || (health?.mode === "chatgpt" ? auth?.status !== "connected" || !auth.sharing || !model || !ocrConsent : !health?.ocr_available)}
                 onClick={() => file.current?.click()}
               >
                 Importer une capture
@@ -567,9 +573,9 @@ function App() {
             </label>
             </div></details>
             </div>
-            <MemoryPanel revision={memoryRevision} changed={memoryChanged} disabled={!!busy || authBusy} />
+            {health && !isHosted && <><MemoryPanel revision={memoryRevision} changed={memoryChanged} disabled={!!busy || authBusy} />
             <div className="memory-use"><label className="check"><input id="use-memory" type="checkbox" checked={useMemory} disabled={!!busy || authBusy} onChange={e => { setUseMemory(e.target.checked); setConsent(false); }} /><span>Utiliser ma mémoire pour cette génération seulement</span></label><p className="preference-help">Désactivé par défaut. Enregistrer un exemple et l’utiliser sont deux choix séparés.</p>
-            {useMemory && <div className="memory-selection" aria-live="polite">{memoryError ? <p className="error" role="alert">{memoryError}</p> : memoryPreview ? <><p>{memoryPreview.examples.length} exemple(s) validé(s) sélectionné(s){memoryPreview.profile ? " et vos préférences enregistrées" : ""}.</p>{memoryPreview.examples.map(item => <details key={item.id}><summary>Voir l’exemple sélectionné</summary><p>{item.reply}</p>{item.conversation && <p>Extrait : {item.conversation}</p>}</details>)}{memoryPreview.profile && <p>Préférences : {memoryPreview.profile.length === "short" ? "phrases courtes" : "longueur équilibrée"}, {memoryPreview.profile.register === "familiar" ? "familier si adapté" : "registre courant"}, {memoryPreview.profile.emoji === "allowed" ? "emoji si adapté" : "sans emoji"}.</p>}<p>{memoryPreview.notice}</p></> : <p>Vérification des exemples à utiliser…</p>}</div>}</div>
+            {useMemory && <div className="memory-selection" aria-live="polite">{memoryError ? <p className="error" role="alert">{memoryError}</p> : memoryPreview ? <><p>{memoryPreview.examples.length} exemple(s) validé(s) sélectionné(s){memoryPreview.profile ? " et vos préférences enregistrées" : ""}.</p>{memoryPreview.examples.map(item => <details key={item.id}><summary>Voir l’exemple sélectionné</summary><p>{item.reply}</p>{item.conversation && <p>Extrait : {item.conversation}</p>}</details>)}{memoryPreview.profile && <p>Préférences : {memoryPreview.profile.length === "short" ? "phrases courtes" : "longueur équilibrée"}, {memoryPreview.profile.register === "familiar" ? "familier si adapté" : "registre courant"}, {memoryPreview.profile.emoji === "allowed" ? "emoji si adapté" : "sans emoji"}.</p>}<p>{memoryPreview.notice}</p></> : <p>Vérification des exemples à utiliser…</p>}</div>}</div></>}
             {health?.mode === "chatgpt" && <div className="model-field">
               <label className="field-label" htmlFor="model">Modèle · forfait ChatGPT</label>
               <select id="model" value={model} disabled={!!busy || authBusy || !models.length} onChange={(e) => { setModel(e.target.value); setResult(null); setConsent(false); setOcrConsent(false); setUseMemory(false); setMemoryPreview(null); }}>
@@ -586,11 +592,11 @@ function App() {
                   checked={consent}
                   onChange={(e) => setConsent(e.target.checked)}
                 />
-                <span>
-                  J’accepte d’envoyer ce texte et mes préférences{useMemory ? ", ainsi que les exemples sauvegardés et les préférences de mémoire sélectionnés ci-dessus," : ""} à{" "}
-                  {health.provider || "mon fournisseur IA configuré"}. Ses
-                  règles de conservation s’appliquent.
-                </span>
+                <span>{health.mode === "local"
+                  ? "J’accepte le traitement de ce texte et de mes préférences par le modèle hébergé sur Réplique. Le texte reste sur ce serveur."
+                  : health.mode === "hosted"
+                  ? "J’accepte que Réplique envoie ce texte et mes préférences à OpenAI pour générer des réponses. Les règles de traitement d’OpenAI s’appliquent."
+                  : <>J’accepte d’envoyer ce texte et mes préférences{useMemory ? ", ainsi que les exemples sauvegardés et les préférences de mémoire sélectionnés ci-dessus," : ""} à {health.provider || "mon fournisseur IA configuré"}. Ses règles de conservation s’appliquent.</>}</span>
               </label>
             ) : (
               <div className="demo-note"><strong>Vous explorez la démo.</strong> Elle utilise des exemples fictifs et des réponses préécrites. Pour une réponse à votre échange, connectez ChatGPT ou configurez un fournisseur IA. Les préférences libres ne sont pas interprétées.</div>
@@ -601,6 +607,7 @@ function App() {
                 !health ||
                 !!busy ||
                 authBusy ||
+                (isHosted && (!account || (!account.subscription_active && account.trial_remaining === 0))) ||
                 (health.mode === "chatgpt" && (!auth?.sharing || auth.status !== "connected" || !model)) ||
                 (useMemory && !memoryPreview) ||
                 !confirmed ||
@@ -705,7 +712,7 @@ function App() {
                           })
                         }
                       />
-                      <SaveMemory reply={r.text} conversation={conversation} intent={intent} tone={tone} locale={locale} changed={memoryChanged} />
+                      {health && !isHosted && <SaveMemory reply={r.text} conversation={conversation} intent={intent} tone={tone} locale={locale} changed={memoryChanged} />}
                       <p className="why">
                         <span>Ce que ça change</span>
                         {r.why}

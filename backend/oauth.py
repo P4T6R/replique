@@ -163,7 +163,9 @@ def save_persistent_session(session):
         raise CredentialStoreError("The operating-system credential store could not save the session.") from exc
 
 
-def load_persistent_session(browser):
+def load_persistent_session(browser, *, owner=False):
+    if owner and not os.getenv("REPLIQUE_CREDENTIAL_KEY_FILE"):
+        raise CredentialStoreError("A protected owner credential key file is required.")
     if os.getenv("REPLIQUE_CREDENTIAL_KEY_FILE"):
         path = _encrypted_credential_path()
         if path.is_symlink() or path.parent.is_symlink():
@@ -205,14 +207,15 @@ def load_persistent_session(browser):
         raise CredentialStoreError("The protected local session is invalid.")
     try:
         record = json.loads(raw)
-        if (record.get("version") != 1 or not safe_equal(record.get("browser", ""), browser or "")
+        if (record.get("version") != 1 or not isinstance(record.get("browser"), str) or not record["browser"]
+                or (not owner and not safe_equal(record["browser"], browser or ""))
                 or not all(isinstance(record.get(key), str) and record[key]
                            for key in ("client_id", "subject", "refresh"))
                 or (record.get("email") is not None and not isinstance(record["email"], str))
                 or not isinstance(record.get("scopes"), list)
                 or not all(isinstance(scope, str) for scope in record["scopes"])):
             return None
-        return Session(browser, record["client_id"], record["subject"], record["email"], "",
+        return Session(record["browser"] if owner else browser, record["client_id"], record["subject"], record["email"], "",
                        record["refresh"], set(record["scopes"]), 0)
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise CredentialStoreError("The protected local session is invalid.") from exc

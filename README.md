@@ -1,10 +1,19 @@
-# Réplique · prototype 0.2
+# Réplique · prototype
+
+## Bêta hébergée
+
+Le déploiement Docker de ce dépôt est préparé pour `replique.duckdns.org` avec
+une session ChatGPT privée du propriétaire côté serveur, des comptes Réplique
+sur invitation et 20 crédits d’essai. Voir [HOSTED.md](HOSTED.md). La session
+doit être autorisée en local par le propriétaire, puis transférée chiffrée au
+VPS ; aucun compte ChatGPT n’est demandé aux visiteurs. L’abonnement payant
+n’est pas ouvert et le fournisseur réel doit être validé avant toute invitation.
 
 Un atelier français pour préparer une réponse qui respecte votre intention et vos limites. Nom de travail, disponibilité de marque non vérifiée.
 
-## Connexion ChatGPT (nouveau)
+## Connexion ChatGPT (parcours local historique)
 
-Le parcours OAuth local et Responses est implémenté et vérifié sur des services simulés. Il n’a pas encore été connecté à un compte réel. Lisez [OAUTH.md](OAUTH.md) pour activer volontairement la connexion locale, les limites et la procédure de vérification. Le jeton d’accès reste en mémoire ; le jeton de renouvellement est conservé dans le coffre du système d’exploitation pour retrouver la session après un redémarrage.
+Le parcours OAuth local et Responses est implémenté et vérifié sur des services simulés. Il n’a pas encore été connecté à un compte réel ; la bêta hébergée utilise une session créée par ce parcours, jamais la connexion des visiteurs. [OAUTH.md](OAUTH.md) décrit le parcours local et ses limites.
 
 ## Ce que vous pouvez essayer
 
@@ -22,7 +31,7 @@ L’adaptateur de fournisseur compatible Chat Completions est implémenté et te
 
 ## Installation locale
 
-Pour l'installation Docker privée sur un serveur, voir [DOCKER.md](DOCKER.md).
+Pour l'installation Docker sur un serveur, voir [DOCKER.md](DOCKER.md).
 Le mode ChatGPT de cette image s'utilise depuis un navigateur local via un
 tunnel SSH ; le domaine public ne peut pas servir directement de callback OAuth
 à ce flux OpenAI.
@@ -42,13 +51,20 @@ cd ..
 
 Ouvrir http://127.0.0.1:8000. Sous Windows, activer `.venv\Scripts\activate` puis lancer `python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --no-access-log` à la place du script shell.
 
-Le serveur sert le frontend compilé. Ne pas exposer cette version sur Internet : pas de gestion multi-utilisateurs, quotas partagés, audit de sécurité de production ou infrastructure de déploiement. La connexion ChatGPT ne transforme pas ce serveur local en service public sécurisé.
+Ce lancement local sert le frontend compilé sur `127.0.0.1` et ne doit pas être
+exposé directement sur Internet. La bêta hébergée utilise le déploiement HTTPS,
+les comptes et les protections décrits dans [HOSTED.md](HOSTED.md).
 
 ## Fournisseur réel, facultatif
 
 Lire `backend/README.md` pour les variables d’environnement. Les secrets restent côté serveur. Le programme ne charge pas automatiquement de fichier `.env`. Ne jamais mettre une clé dans le frontend, un commit ou une capture.
 
-Le mode réel nécessite un fournisseur compatible, un modèle disponible et éventuellement un compte facturé par ce fournisseur. Ces éléments ne sont pas créés ni activés par ce prototype. Avant chaque génération, l’interface affiche le domaine destinataire et exige le consentement à l’envoi du texte et des préférences. Les politiques de conservation du fournisseur s’appliquent. Une erreur fournisseur est affichée et ne se transforme pas silencieusement en démonstration.
+Le mode `live` facultatif nécessite un fournisseur compatible, un modèle
+disponible et éventuellement un compte facturé par ce fournisseur. La bêta
+hébergée utilise plutôt la session propriétaire créée séparément avec ChatGPT.
+Avant chaque génération distante, l’interface indique la destination et exige
+le consentement à l’envoi du texte. Une erreur fournisseur est affichée sans
+substitution silencieuse par la démo.
 
 ## Vie privée et limites
 

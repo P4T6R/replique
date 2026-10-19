@@ -15,7 +15,7 @@ try {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(process.env.TEST_URL || "http://127.0.0.1:8000");
-  await page.getByText("Démonstration locale", { exact: true }).waitFor();
+  await page.getByText("Démo · exemples préécrits", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Essayer un exemple" }).click();
   await page.getByLabel("J’ai relu le texte").check();
   await page.getByRole("button", { name: "Trouver mes mots" }).click();
@@ -41,7 +41,7 @@ try {
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "../evidence/mobile.png", fullPage: true });
-  await page.getByRole("button", { name: "Effacer la session" }).click();
+  await page.getByRole("button", { name: "Effacer la session et commencer une nouvelle conversation" }).click();
   assert.equal(
     await page.getByLabel("Votre conversation", { exact: true }).inputValue(),
     "",

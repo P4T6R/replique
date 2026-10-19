@@ -27,7 +27,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 from .oauth import router as auth_router, COOKIE, same_origin, enabled as oauth_enabled
+from .accounts import router as account_router, public_origin, request_account, reserve, finish
 from .chatgpt_provider import stream_text
+from .owner_provider import stored_owner, generate_text as owner_generate_text
 from .memory import router as memory_router, select_context
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -58,13 +60,13 @@ class Settings:
 
     @property
     def provider(self) -> str | None:
-        return "api.openai.com" if self.mode == "chatgpt" else urlsplit(self.base_url).hostname if self.mode == "live" else None
+        return "OpenAI" if self.mode == "owner_chatgpt" else "api.openai.com" if self.mode == "chatgpt" else "serveur Réplique" if self.mode == "local" else urlsplit(self.base_url).hostname if self.mode == "live" else None
 
 
 def settings() -> Settings:
     return Settings(
         os.getenv("REPLIQUE_MODE", "demo").lower(),
-        os.getenv("REPLIQUE_API_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        os.getenv("REPLIQUE_LOCAL_MODEL_URL", "http://model:11434/v1").rstrip("/") if os.getenv("REPLIQUE_MODE", "demo").lower() == "local" else os.getenv("REPLIQUE_API_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
         os.getenv("REPLIQUE_API_KEY", ""),
         os.getenv("REPLIQUE_MODEL", ""),
     )
@@ -76,8 +78,12 @@ def provider_configuration(config: Settings) -> None:
         _ = parsed.port
     except ValueError:
         raise HTTPException(503, "La configuration de l’adresse du fournisseur est invalide.") from None
+    if config.mode == "local":
+        if parsed.scheme != "http" or parsed.hostname not in {"model", "127.0.0.1", "localhost"} or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path != "/v1" or config.api_key or not config.model:
+            raise HTTPException(503, "Le modèle local n’est pas configuré sur une adresse privée valide.")
+        return
     if config.mode != "live":
-        raise HTTPException(503, "Le mode serveur est invalide. Utilisez REPLIQUE_MODE=demo ou live.")
+        raise HTTPException(503, "Le mode serveur est invalide.")
     if (parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password
             or parsed.query or parsed.fragment or (parsed.scheme == "http" and parsed.hostname not in LOCAL_HOSTS)):
         raise HTTPException(503, "La configuration du fournisseur est invalide. HTTPS est requis hors localhost.")
@@ -120,7 +126,7 @@ class Reply(BaseModel):
 
 
 class GenerateResponse(BaseModel):
-    mode: Literal["demo", "live", "chatgpt"]
+    mode: Literal["demo", "live", "chatgpt", "local", "hosted"]
     notice: str
     insight: str
     replies: list[Reply] = Field(min_length=3, max_length=3)
@@ -169,27 +175,46 @@ class LocalRequestGuard:
         except ValueError:
             hostname = None
         origin = headers.get("origin")
-        valid_origin = True
-        if origin:
-            try:
-                parsed = urlsplit(origin)
-                expected_origin = scope.get("scheme", "http") + "://" + host
-                dev_origin = os.getenv("REPLIQUE_DEV_ORIGIN", "")
-                allowed_origins = {expected_origin}
-                if dev_origin:
-                    dev = urlsplit(dev_origin)
-                    if dev.scheme in {"http", "https"} and dev.hostname in LOCAL_HOSTS and not dev.username and not dev.password and not dev.path and not dev.query and not dev.fragment:
-                        allowed_origins.add(dev_origin)
-                valid_origin = (origin in allowed_origins and parsed.scheme in {"http", "https"}
-                                and parsed.hostname in LOCAL_HOSTS and not parsed.username
-                                and not parsed.password and not parsed.path and not parsed.query and not parsed.fragment)
-            except ValueError:
-                valid_origin = False
-        callback_navigation = (scope.get("method") == "GET" and scope.get("path") == "/api/auth/callback"
-                               and hostname == "127.0.0.1" and headers.get("sec-fetch-mode") in {None, "navigate"})
-        if hostname not in LOCAL_HOSTS or (not valid_origin and not callback_navigation) or (headers.get("sec-fetch-site") == "cross-site" and not callback_navigation):
-            reason = "hôte non local" if hostname not in LOCAL_HOSTS else "origine différente" if not valid_origin else "requête intersite"
-            return await JSONResponse({"detail": f"Requête refusée ({reason}). Ouvrez Réplique avec http://127.0.0.1:8000 et gardez cette même adresse pendant la connexion."}, status_code=403)(scope, receive, send)
+        published = public_origin()
+        if published:
+            from urllib.parse import urlsplit as parse_url
+            target = parse_url(published)
+            path = scope.get("path", "")
+            api_allowed = (path == "/api/health" or path.startswith("/api/account/")
+                           or path in {"/api/generate", "/api/ocr"})
+            mutating = scope.get("method") not in {"GET", "HEAD", "OPTIONS"}
+            allowed = (target.scheme == "https" and target.hostname and not target.path
+                       and not target.query and not target.fragment and hostname == target.hostname
+                       and (not path.startswith("/api/") or api_allowed)
+                       and (not origin or origin == published)
+                       and headers.get("sec-fetch-site") != "cross-site"
+                       and (not mutating or (origin == published and headers.get("x-replique-request") == "1")))
+            if not allowed:
+                return await JSONResponse({"detail": "Requête refusée pour cette origine."}, status_code=403)(scope, receive, send)
+            if path.startswith("/api/account/") and os.getenv("REPLIQUE_MODE") not in {"local", "owner_chatgpt"}:
+                return await JSONResponse({"detail": "Mode hébergé requis."}, status_code=503)(scope, receive, send)
+        else:
+            valid_origin = True
+            if origin:
+                try:
+                    parsed = urlsplit(origin)
+                    expected_origin = scope.get("scheme", "http") + "://" + host
+                    dev_origin = os.getenv("REPLIQUE_DEV_ORIGIN", "")
+                    allowed_origins = {expected_origin}
+                    if dev_origin:
+                        dev = urlsplit(dev_origin)
+                        if dev.scheme in {"http", "https"} and dev.hostname in LOCAL_HOSTS and not dev.username and not dev.password and not dev.path and not dev.query and not dev.fragment:
+                            allowed_origins.add(dev_origin)
+                    valid_origin = (origin in allowed_origins and parsed.scheme in {"http", "https"}
+                                    and parsed.hostname in LOCAL_HOSTS and not parsed.username
+                                    and not parsed.password and not parsed.path and not parsed.query and not parsed.fragment)
+                except ValueError:
+                    valid_origin = False
+            callback_navigation = (scope.get("method") == "GET" and scope.get("path") == "/api/auth/callback"
+                                   and hostname == "127.0.0.1" and headers.get("sec-fetch-mode") in {None, "navigate"})
+            if hostname not in LOCAL_HOSTS or (not valid_origin and not callback_navigation) or (headers.get("sec-fetch-site") == "cross-site" and not callback_navigation):
+                reason = "hôte non local" if hostname not in LOCAL_HOSTS else "origine différente" if not valid_origin else "requête intersite"
+                return await JSONResponse({"detail": f"Requête refusée ({reason}). Ouvrez Réplique avec http://127.0.0.1:8000 et gardez cette même adresse pendant la connexion."}, status_code=403)(scope, receive, send)
         try:
             length = int(headers.get("content-length", "0"))
         except ValueError:
@@ -234,8 +259,10 @@ class LocalRequestGuard:
 app = FastAPI(title="Réplique", version="0.4.0", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(LocalRequestGuard)
 app.include_router(auth_router)
+app.include_router(account_router)
 app.include_router(memory_router)
 ocr_slots = asyncio.Semaphore(2)
+local_model_slot = asyncio.Semaphore(1)
 
 
 @app.exception_handler(RequestValidationError)
@@ -259,12 +286,26 @@ def ocr_languages() -> tuple[str, ...]:
 async def health():
     config = settings()
     langs = await run_in_threadpool(ocr_languages)
-    if config.mode not in {"demo", "live", "chatgpt"}:
-        raise HTTPException(503, "REPLIQUE_MODE doit être demo, live ou chatgpt.")
-    if config.mode == "live":
+    if config.mode not in {"demo", "live", "chatgpt", "local", "owner_chatgpt"}:
+        raise HTTPException(503, "REPLIQUE_MODE doit être demo, live, local, owner_chatgpt ou chatgpt.")
+    if config.mode in {"live", "local"}:
         provider_configuration(config)
+    if config.mode == "local":
+        try:
+            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+                response = await client.get(config.base_url.removesuffix("/v1") + "/api/tags")
+                response.raise_for_status()
+                names = {item.get("name") for item in response.json().get("models", [])}
+                if config.model not in names:
+                    raise ValueError("model missing")
+        except (httpx.HTTPError, ValueError, TypeError):
+            raise HTTPException(503, "Le modèle local n’est pas prêt. Vérifiez le service et le modèle installé.") from None
+    if config.mode == "owner_chatgpt":
+        if not public_origin():
+            raise HTTPException(503, "Le mode hébergé exige une origine publique HTTPS.")
+        await run_in_threadpool(stored_owner)
     chatgpt_ocr = config.mode == "chatgpt" and oauth_enabled()
-    return {"mode": config.mode, "ocr_available": bool(langs) or chatgpt_ocr, "ocr_languages": list(langs), "provider": config.provider}
+    return {"mode": "hosted" if config.mode == "owner_chatgpt" else config.mode, "ocr_available": bool(langs) or chatgpt_ocr, "ocr_languages": list(langs), "provider": config.provider}
 
 
 def fold(text: str) -> str:
@@ -475,8 +516,9 @@ async def live_answer(request: GenerateRequest, config: Settings, memory_context
     if config.api_key:
         headers["Authorization"] = "Bearer " + config.api_key
     try:
-        async with asyncio.timeout(PROVIDER_TIMEOUT):
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=8), follow_redirects=False, trust_env=False) as client:
+        timeout = 120 if config.mode == "local" else PROVIDER_TIMEOUT
+        async with asyncio.timeout(timeout):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=8), follow_redirects=False, trust_env=False) as client:
                 # Stream with a hard response cap; redirects must never forward a server secret.
                 async with client.stream("POST", config.base_url + "/chat/completions", headers=headers, json=payload) as response:
                     if response.status_code == 429:
@@ -506,7 +548,7 @@ async def live_answer(request: GenerateRequest, config: Settings, memory_context
         raise HTTPException(502, "Impossible de joindre le fournisseur IA. Aucun modèle de démonstration n’a été substitué.") from None
     except (ValueError, KeyError, IndexError, TypeError, ValidationError):
         raise HTTPException(502, "La réponse du fournisseur IA n’a pas le format attendu. Aucune proposition n’est affichée.") from None
-    return GenerateResponse(mode="live", notice="Propositions générées par le fournisseur " + str(config.provider) + ". Vérifiez les faits et modifiez les mots avant de les copier.",
+    return GenerateResponse(mode=config.mode, notice=("Propositions générées sur le serveur Réplique." if config.mode == "local" else "Propositions générées par le fournisseur " + str(config.provider) + ".") + " Vérifiez les faits et modifiez les mots avant de les copier.",
         insight=clean_text(answer.insight), boundary=False,
         replies=[Reply(id=str(i + 1), title=reply.title, text=clean_text(reply.text), why=clean_text(reply.why)) for i, reply in enumerate(answer.replies)])
 
@@ -516,6 +558,13 @@ async def generate(request: GenerateRequest, http_request: Request):
     if not request.context_confirmed:
         raise HTTPException(422, "Relisez le texte, identifiez les interlocuteurs et confirmez la relecture avant de générer.")
     config = settings()
+    account_id = request_account(http_request)["id"] if public_origin() else None
+    if public_origin() and config.mode not in {"local", "owner_chatgpt"}:
+        raise HTTPException(503, "Le site public exige un fournisseur hébergé.")
+    if config.mode == "owner_chatgpt" and not public_origin():
+        raise HTTPException(503, "Le mode hébergé exige une origine publique HTTPS.")
+    if public_origin() and request.use_memory:
+        raise HTTPException(403, "La mémoire personnelle sera disponible après son isolation par compte.")
     if config.mode == "demo" and request.conversation not in DEMO_CONVERSATIONS:
         raise HTTPException(503, "La démonstration utilise uniquement ses exemples fictifs prédéfinis. Pour votre propre conversation, configurez un fournisseur IA côté serveur, puis confirmez l’envoi du texte.")
     boundary = boundary_kind(request.conversation)
@@ -545,7 +594,37 @@ async def generate(request: GenerateRequest, http_request: Request):
             raise HTTPException(502, "La réponse ChatGPT n’a pas le format attendu. Aucune proposition n’est affichée.") from None
         return GenerateResponse(mode="chatgpt", memory_used=memory_used, notice="Propositions générées avec votre forfait ChatGPT. Vérifiez les faits avant de copier.", insight=answer.insight, boundary=False,
             replies=[Reply(id=str(i + 1), title=reply.title, text=reply.text, why=reply.why) for i, reply in enumerate(answer.replies)])
-    result = await live_answer(request, config, memory_context)
+    slot_acquired = False
+    if config.mode in {"local", "owner_chatgpt"}:
+        try:
+            await asyncio.wait_for(local_model_slot.acquire(), timeout=5)
+            slot_acquired = True
+        except asyncio.TimeoutError:
+            raise HTTPException(503, "Le service de génération est occupé. Réessayez dans un instant.") from None
+    try:
+        reservation = reserve(account_id) if account_id else None
+        try:
+            if config.mode == "owner_chatgpt":
+                if not request.consent:
+                    raise HTTPException(403, "Confirmez l’envoi de cette conversation à OpenAI avant de générer.")
+                content = await owner_generate_text(SYSTEM_PROMPT + "\nJSON attendu : " + json.dumps(ProviderAnswer.model_json_schema()), generation_data(request))
+                try:
+                    answer = validate_answer(content, request)
+                except (ValueError, KeyError, TypeError, ValidationError):
+                    raise HTTPException(502, "La réponse du service n’a pas le format attendu. Aucun crédit n’a été consommé.") from None
+                result = GenerateResponse(mode="hosted", notice="Propositions générées par Réplique avec OpenAI. Vérifiez les faits avant de copier.",
+                    insight=answer.insight, boundary=False, replies=[Reply(id=str(i + 1), title=reply.title, text=reply.text, why=reply.why) for i, reply in enumerate(answer.replies)])
+            else:
+                result = await live_answer(request, config, memory_context)
+        except BaseException:
+            if reservation:
+                finish(reservation, False)
+            raise
+        if reservation:
+            finish(reservation, True)
+    finally:
+        if slot_acquired:
+            local_model_slot.release()
     result.memory_used = memory_used
     return result
 
@@ -642,6 +721,8 @@ def extract_ocr(data: bytes, mime: str) -> dict:
 @app.post("/api/ocr")
 async def ocr(request: Request, file: UploadFile = File(...), consent: bool = Form(False), model: str = Form("")):
     try:
+        if public_origin():
+            request_account(request)
         use_chatgpt = settings().mode == "chatgpt"
         if use_chatgpt:
             same_origin(request)

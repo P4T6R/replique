@@ -15,8 +15,8 @@ COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt \
     && groupadd --gid 10001 replique \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /data replique
-COPY backend/ /app/backend/
-COPY --from=frontend /build/dist/ /app/frontend/dist/
+COPY --chown=10001:10001 backend/ /app/backend/
+COPY --chown=10001:10001 --from=frontend /build/dist/ /app/frontend/dist/
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

@@ -7,7 +7,9 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "test:e2e": "node tests/e2e.mjs",
-    "test": "node tests/dom.mjs && node tests/contrast.mjs && node tests/memory.mjs"
+    "test:e2e:local": "node tests/local-browser.mjs",
+    "test:e2e:hosted": "node tests/local-browser.mjs hosted",
+    "test": "node tests/dom.mjs && node tests/contrast.mjs && node tests/memory.mjs && node tests/local.mjs && node tests/local.mjs hosted"
   },
   "dependencies": {
     "react": "19.2.0",
