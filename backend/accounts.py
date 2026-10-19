@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 TRIAL_CREDITS = 20
 SESSION_SECONDS = 30 * 24 * 3600
 RESERVATION_SECONDS = 300
-REQUEST_LIMITS = {"generate": 6, "ocr": 10}  # per account, per fixed minute
+REQUEST_LIMITS = {"generate": 6, "ocr": 10, "ocr_daily": 30}
 COOKIE = "replique_account"
 router = APIRouter(prefix="/api/account")
 
@@ -226,14 +226,15 @@ def limit_account(account_id: str, action: str) -> None:
     """Bound expensive public requests without locking a victim's account."""
     maximum = REQUEST_LIMITS[action]
     now = int(time.time())
-    window = now - now % 60
+    period = 86400 if action == "ocr_daily" else 60
+    window = now - now % period
     with database(True) as db:
         previous = db.execute("SELECT window_start,calls FROM request_limits WHERE account_id=? AND action=?",
                               (account_id, action)).fetchone()
         calls = previous["calls"] if previous and previous["window_start"] == window else 0
         if calls >= maximum:
             raise HTTPException(429, "Trop de demandes. Réessayez dans un instant.",
-                                headers={"Retry-After": str(60 - now % 60)})
+                                headers={"Retry-After": str(period - now % period)})
         db.execute("INSERT INTO request_limits (account_id,action,window_start,calls) VALUES (?,?,?,?) "
                    "ON CONFLICT(account_id,action) DO UPDATE SET window_start=excluded.window_start,calls=excluded.calls",
                    (account_id, action, window, calls + 1))

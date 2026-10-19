@@ -76,7 +76,7 @@ async def owner_model() -> tuple[str, str]:
     return browser, preferred
 
 
-async def generate_text(instructions: str, user_data: str) -> str:
+async def generate_text(instructions: str, user_data: str | list[dict]) -> str:
     browser, model = await owner_model()
     try:
         return await stream_text(browser, model, instructions, user_data)

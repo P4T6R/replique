@@ -116,6 +116,15 @@ qu’une requête sans compte est refusée. Mesurer la vitesse et les limites du
 forfait avec deux testeurs. Les comptes sont dans `data/accounts.sqlite3` ;
 sauvegarder ce fichier et la session privée comme des données sensibles.
 
+Pour une capture de conversation, le visiteur accepte séparément l’envoi de
+l’image à OpenAI. Le modèle `REPLIQUE_MODEL` doit prendre en charge les images.
+La lecture remplit le champ texte, sans produire immédiatement de réponse : le
+visiteur relit et attribue les messages, confirme l’envoi du texte, puis clique
+sur « Trouver mes mots ». L’extraction ne retire pas de crédit d’essai, mais
+utilise le forfait ChatGPT du propriétaire et est limitée à 30 images par jour
+et par compte. Un fichier HEIC, une image de plus de 5 Mo ou une photo sans texte
+de conversation lisible doit être remplacé par une capture PNG/JPG/WebP nette.
+
 L’abonnement payant n’est pas ouvert : après 20 crédits, Réplique l’indique
 sans accepter de paiement. Avant une offre commerciale mondiale, choisir un
 prestataire de paiement, obtenir une base fournisseur autorisée et vérifier
@@ -127,8 +136,8 @@ un SaaS payant.
 
 Avec `deploy/nginx-https.conf`, Nginx limite par adresse IP les connexions à
 5/minute, les générations et l’OCR à 12/minute, avec de petites rafales. Le
-backend borne aussi chaque compte à 6 demandes de génération et 10 OCR par
-minute. Un dépassement renvoie HTTP 429 ; les échecs de mot de passe ne
+backend borne aussi chaque compte à 6 demandes de génération par minute,
+10 OCR par minute et 30 OCR par jour. Un dépassement renvoie HTTP 429 ; les échecs de mot de passe ne
 verrouillent plus le compte d’une victime. Vérifier `nginx -t` avant de recharger
 la configuration, puis vérifier une erreur 429 contrôlée en environnement de
 test. Ajuster ces valeurs après avoir mesuré la charge réelle du KVM 2.

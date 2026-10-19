@@ -1,6 +1,7 @@
 """Hosted-owner contract with synthetic encrypted credentials and provider calls."""
 
 import asyncio
+import io
 import json
 import os
 import tempfile
@@ -12,13 +13,14 @@ from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import httpx
+from PIL import Image
 
 from backend.accounts import create_invitation
 from backend.app import app
 from backend.oauth import Session, load_persistent_session, oauth, save_persistent_session
 from backend.operations import report
-from backend.owner_provider import unavailable
-from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER
+from backend.owner_provider import OwnerProviderError, unavailable
+from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER, image_bytes
 
 ORIGIN = "https://replique.duckdns.org"
 HEADERS = {"Origin": ORIGIN, "X-Replique-Request": "1"}
@@ -100,6 +102,48 @@ class OwnerProviderTests(unittest.TestCase):
             self.assertEqual(self.generate().status_code, 503)
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
         self.assertEqual(report(1)["outcomes"], {"configuration": 1})
+
+    def test_hosted_photo_uses_private_model_with_image_consent_and_keeps_credit(self):
+        self.provision()
+        self.register()
+        upload = {"file": ("capture.png", image_bytes(), "image/png")}
+        denied = self.client.post("/api/ocr", headers=HEADERS, files=upload)
+        self.assertEqual(denied.status_code, 403)
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value="Autre personne : Bonjour") as vision:
+            accepted = self.client.post("/api/ocr", headers=HEADERS, files=upload,
+                                        data={"consent": "true", "model": "visitor-cannot-select"})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(accepted.json()["text"], "Autre personne : Bonjour")
+        self.assertEqual(accepted.json()["language"], "openai")
+        self.assertTrue(vision.await_args.args[1][1]["image_url"].startswith("data:image/png;base64,"))
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
+        self.assertNotIn("private-owner@example.test", accepted.text)
+        with Image.open(io.BytesIO(image_bytes())) as source:
+            jpeg = io.BytesIO()
+            source.convert("RGB").save(jpeg, format="JPEG")
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value="Autre personne : Salut"):
+            photo = self.client.post("/api/ocr", headers=HEADERS,
+                                     files={"file": ("photo.jpg", jpeg.getvalue(), "image/jpeg")},
+                                     data={"consent": "true"})
+        self.assertEqual(photo.status_code, 200, photo.text)
+        self.assertEqual(photo.json()["text"], "Autre personne : Salut")
+
+    def test_hosted_photo_has_daily_limit_and_releases_credit_after_failure(self):
+        self.provision()
+        self.register()
+        upload = {"file": ("capture.png", image_bytes(), "image/png")}
+        with patch("backend.accounts.REQUEST_LIMITS", {"generate": 6, "ocr": 10, "ocr_daily": 1}), \
+             patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   side_effect=OwnerProviderError("quota")):
+            failure = self.client.post("/api/ocr", headers=HEADERS, files=upload,
+                                       data={"consent": "true"})
+            limited = self.client.post("/api/ocr", headers=HEADERS, files=upload,
+                                       data={"consent": "true"})
+        self.assertEqual(failure.status_code, 503)
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
 
     def test_codex_auth_file_does_not_activate_public_provider(self):
         (Path(self.private.name) / "auth.json").write_text('{"tokens":{"access_token":"fake"}}')

@@ -14,6 +14,7 @@ window.fetch = async (url, options = {}) => {
   const data = url === "/api/health" ? { mode, provider: mode === "hosted" ? "OpenAI" : "serveur Réplique", ocr_available: true, ocr_languages: ["fra"] }
     : url === "/api/account/status" ? { detail: statusFailure ? "Service indisponible." : "Connectez-vous." }
     : url === "/api/account/register" ? { email: "beta@example.test", trial_remaining: remaining, trial_total: 20, subscription_active: false, subscription_available: false }
+    : url === "/api/ocr" ? { text: "Autre personne : Bonjour depuis la capture", warning: "Texte extrait. Relisez-le avant de continuer." }
     : url === "/api/generate" ? { mode, notice: "Propositions Réplique", insight: "Une proposition", boundary: false, replies: [
       { id: "1", title: "Simple", text: "Bonjour.", why: "Court." },
       { id: "2", title: "Plus chaleureuse", text: "Salut, ça va ?", why: "Amical." },
@@ -54,6 +55,21 @@ if (mode === "hosted") {
   assert.match(document.querySelector(".consent")?.textContent || "", /à OpenAI/);
   assert.doesNotMatch(document.body.textContent, /private-owner@example\.test/);
 }
+const ocrConsent = document.querySelector(".ocr-consent input");
+const importButton = [...document.querySelectorAll(".input-tools button")].find(button => button.textContent.includes("Importer"));
+if (mode === "hosted") {
+  assert.ok(ocrConsent);
+  assert.ok(importButton.disabled);
+  ocrConsent.click();
+  await waitFor(() => !importButton.disabled);
+}
+const fileInput = document.querySelector('input[type="file"]');
+Object.defineProperty(fileInput, "files", { configurable: true, value: [new window.File(["image"], "capture.png", { type: "image/png" })] });
+fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+await waitFor(() => document.querySelector("#conversation")?.value.includes("Bonjour depuis la capture"));
+assert.match(document.querySelector(".ocr-note")?.textContent || "", /Relisez/);
+assert.equal(calls.find(call => call.url === "/api/ocr")?.options.body.get("consent"), mode === "hosted" ? "true" : "false");
+assert.ok(document.querySelector(".compose .primary").disabled);
 const conversation = document.querySelector("#conversation");
 const setConversation = value => {
   Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set.call(conversation, value);

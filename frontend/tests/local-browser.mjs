@@ -11,6 +11,7 @@ try {
   page.on("pageerror", error => errors.push(error.message));
   let registered = false;
   let credits = 20;
+  let ocrAttempts = 0;
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     let status = 200;
@@ -30,6 +31,11 @@ try {
           { id: "2", title: "Plus chaleureuse", text: "Ça me ferait plaisir.", why: "Chaleureux." },
           { id: "3", title: "Plus directe", text: "On se voit ?", why: "Direct." },
         ] };
+    } else if (path === "/api/ocr") {
+      ocrAttempts++;
+      if (mode === "hosted") assert.match(route.request().postData() || "", /name="consent"\r?\n\r?\ntrue/);
+      if (ocrAttempts === 1) { status = 422; body = { detail: "Aucun texte lisible n’a été détecté." }; }
+      else body = { text: "Autre personne : Bonjour depuis la capture", warning: "Texte extrait. Relisez-le avant de continuer." };
     } else { status = 404; body = { detail: "Route absente" }; }
     await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   });
@@ -46,6 +52,19 @@ try {
   await page.getByLabel("Code d’invitation").fill("fake-test-invite");
   await page.getByRole("button", { name: "Créer mon compte" }).click();
   await page.getByText("20 crédits").waitFor();
+  if (mode === "hosted") {
+    assert.equal(await page.getByRole("button", { name: "Importer une capture" }).isDisabled(), true);
+    await page.locator(".ocr-consent input").check();
+  }
+  const capture = { name: "capture.png", mimeType: "image/png", buffer: Buffer.from("mock image") };
+  await page.locator('input[type="file"]').setInputFiles(capture);
+  await page.locator(".context-sheet .error").getByText(/Aucun texte lisible/).waitFor();
+  if (mode === "hosted") await page.locator(".ocr-consent input").check();
+  await page.locator('input[type="file"]').setInputFiles(capture);
+  await page.waitForFunction(() => document.querySelector("#conversation")?.value.includes("Bonjour depuis la capture"));
+  await page.locator(".ocr-note").getByText(/Relisez-le/).waitFor();
+  assert.equal(ocrAttempts, 2);
+  assert.equal(await page.getByRole("button", { name: "Trouver mes mots" }).isDisabled(), true);
   await page.getByRole("button", { name: "Essayer un exemple" }).click();
   await page.getByLabel("J’ai relu le texte").check();
   await page.locator(".consent input").check();

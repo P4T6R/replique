@@ -18,7 +18,7 @@ Le parcours OAuth local et Responses est implémenté et vérifié sur des servi
 ## Ce que vous pouvez essayer
 
 - Coller une conversation en attribuant les messages à `Moi :` et `Autre personne :`.
-- Importer une capture PNG/JPEG/WebP, extraire son texte avec Tesseract local ou, en mode ChatGPT, avec OpenAI après un accord distinct, puis corriger le texte et confirmer les auteurs.
+- Importer une capture PNG/JPEG/WebP, extraire son texte avec Tesseract local ou, en mode ChatGPT et sur le site hébergé, avec OpenAI après un accord distinct, puis corriger le texte et confirmer les auteurs.
 - Choisir une intention, un ton, des préférences de style et l’utilisation d’un emoji.
 - Lire trois formulations et une brève explication éditoriale, les modifier, les copier ou les exporter en texte.
 - Effacer la session. L’utilisateur garde la décision et envoie lui-même dans sa messagerie.
@@ -70,7 +70,7 @@ substitution silencieuse par la démo.
 
 - Mode temporaire par défaut : aucune génération, copie ou extraction OCR n’enregistre de conversation. La mémoire locale SQLite est alimentée uniquement par « Retenir ce choix » ou un enregistrement explicite du profil. Le témoin d’accueil peut rester dans localStorage ; aucun texte de conversation n’y est conservé.
 - Les conversations sont en mémoire dans le navigateur et traversent le serveur pour l’OCR/génération. En mode réel, elles sont envoyées au fournisseur configuré.
-- Les images OCR sont bornées en taille et dimensions et normalisées sans métadonnées. En mode ChatGPT, l’image est envoyée à OpenAI uniquement après un accord distinct ; ailleurs, l’OCR est local. Le fournisseur applique ses propres conditions de traitement et conservation.
+- Les images OCR sont bornées en taille et dimensions et normalisées sans métadonnées. En mode ChatGPT et sur le site hébergé, l’image est envoyée à OpenAI uniquement après un accord distinct ; ailleurs, l’OCR est local. Le fournisseur applique ses propres conditions de traitement et conservation.
 - Effacer annule l’affichage des requêtes en cours et enlève l’état de cet atelier ; cela ne supprime pas les exports, le presse-papiers, les données déjà reçues par un fournisseur, les caches système ou les éventuels journaux d’une infrastructure externe.
 - Évitez les captures de tiers non nécessaires et retirez les coordonnées et données sensibles.
 - Tesseract est absent de certains environnements ; le mode ChatGPT peut alors demander une transcription OpenAI avec consentement distinct. Les petites polices et bulles complexes peuvent être mal lues. Relecture et attribution des auteurs obligatoires.

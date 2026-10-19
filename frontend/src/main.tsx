@@ -51,8 +51,11 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   try {
     data = await r.json();
   } catch {
-    throw new Error(
-      "Le serveur ne répond pas correctement. Réessayez dans un instant.",
+    throw new HttpRequestError(
+      r.status === 413 ? "L’envoi dépasse la taille autorisée. Choisissez une capture plus petite."
+        : r.status === 429 ? "Trop de demandes. Réessayez dans un instant."
+          : "Le serveur ne répond pas correctement. Réessayez dans un instant.",
+      r.status,
     );
   }
   if (!r.ok)
@@ -94,6 +97,7 @@ function App() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [ocrNotice, setOcrNotice] = useState("");
+  const [ocrError, setOcrError] = useState("");
   const [useMemory, setUseMemory] = useState(false), [memoryPreview, setMemoryPreview] = useState<MemoryPreview | null>(null), [memoryError, setMemoryError] = useState(""), [memoryRevision, setMemoryRevision] = useState(0);
   const memoryChanged = () => { setMemoryRevision(v => v + 1); setConsent(false); setUseMemory(false); setMemoryPreview(null); };
   useEffect(() => {
@@ -106,6 +110,7 @@ function App() {
     abort = useRef<AbortController | null>(null),
     results = useRef<HTMLElement>(null);
   const isHosted = health?.mode === "local" || health?.mode === "hosted";
+  const usesCloudOcr = health?.mode === "chatgpt" || health?.mode === "hosted";
   const connect = () => {
     setConnection("");
     request<Health>("/api/health")
@@ -292,30 +297,31 @@ function App() {
   async function upload(f: File | undefined) {
     if (!f) return;
     if (health?.mode === "chatgpt" && (auth?.status !== "connected" || !auth.sharing || !model)) {
-      setError("Connectez ChatGPT et choisissez un modèle avant d’utiliser l’OCR OpenAI.");
+      setOcrError("Connectez ChatGPT et choisissez un modèle avant d’utiliser l’OCR OpenAI.");
       return;
     }
-    if (health?.mode === "chatgpt" && !ocrConsent) {
-      setError("Autorisez l’envoi de cette capture à OpenAI avant de lancer la transcription.");
+    if (usesCloudOcr && !ocrConsent) {
+      setOcrError("Autorisez l’envoi de cette capture à OpenAI avant de lancer la lecture.");
       return;
     }
     if (
       !["image/png", "image/jpeg", "image/webp"].includes(f.type) ||
       f.size > 5 * 1024 * 1024
     ) {
-      setError("Choisissez une image PNG, JPG ou WebP de moins de 5 Mo.");
+      setOcrError("Choisissez une image PNG, JPG ou WebP de moins de 5 Mo.");
       return;
     }
     const id = ++generation.current;
     abort.current?.abort();
     abort.current = new AbortController();
     setBusy("ocr");
-    setError("");
+    setOcrError("");
+    setOcrNotice("");
     setResult(null);
     setConfirmed(false);
     const form = new FormData();
     form.append("file", f);
-    form.append("consent", String(health?.mode === "chatgpt" && ocrConsent));
+    form.append("consent", String(usesCloudOcr && ocrConsent));
     if (health?.mode === "chatgpt") form.append("model", model);
     try {
       const data = await request<{
@@ -332,15 +338,16 @@ function App() {
         updateConversation(data.text);
         setOcrNotice(
           data.warning ||
-            "Extraction terminée. Corrigez le texte et attribuez chaque message à Moi ou Autre personne.",
+            "Texte extrait. Relisez-le, attribuez les messages, confirmez la relecture et l’envoi du texte, puis cliquez sur « Trouver mes mots ».",
         );
+        setTimeout(() => document.querySelector<HTMLTextAreaElement>("#conversation")?.focus(), 0);
       }
     } catch (e) {
       if (
         id === generation.current &&
         !(e instanceof DOMException && e.name === "AbortError")
       )
-        setError((e as Error).message);
+        setOcrError((e as Error).message);
     } finally {
       if (id === generation.current) setBusy("");
       setOcrConsent(false);
@@ -440,11 +447,11 @@ function App() {
               </span>
             </div>
             <div className="input-tools">
-              {health?.mode === "chatgpt" && <label className="check ocr-consent"><input type="checkbox" checked={ocrConsent} disabled={!!busy || auth?.status !== "connected" || !auth.sharing || !model} onChange={(e) => setOcrConsent(e.target.checked)} /><span>J’autorise l’envoi de cette capture à OpenAI pour retranscrire le texte. Relisez et corrigez le résultat avant de continuer.</span></label>}
+              {usesCloudOcr && <label className="check ocr-consent"><input type="checkbox" checked={ocrConsent} disabled={!!busy || (isHosted ? !account : auth?.status !== "connected" || !auth.sharing || !model)} onChange={(e) => setOcrConsent(e.target.checked)} /><span>J’autorise l’envoi de cette capture à OpenAI pour en extraire le texte. Je relirai le résultat avant de demander des réponses.</span></label>}
               <button
                 type="button"
                 className="text-button"
-                disabled={!!busy || (isHosted && !account) || (health?.mode === "chatgpt" ? auth?.status !== "connected" || !auth.sharing || !model || !ocrConsent : !health?.ocr_available)}
+                disabled={!!busy || (isHosted && (!account || (!account.subscription_active && account.trial_remaining === 0))) || (health?.mode === "chatgpt" && (auth?.status !== "connected" || !auth.sharing || !model)) || (usesCloudOcr && !ocrConsent) || !health?.ocr_available}
                 onClick={() => file.current?.click()}
               >
                 Importer une capture
@@ -468,7 +475,10 @@ function App() {
                 onChange={(e) => upload(e.target.files?.[0])}
               />
             </div>
-            <p className="upload-info">{health?.mode === "chatgpt" ? "PNG, JPG ou WebP · 5 Mo max. Après votre accord, la capture est envoyée à OpenAI pour transcription." : "PNG, JPG ou WebP · 5 Mo max. Extraction locale, puis suppression du fichier temporaire."}</p>
+            <p className="upload-info">{usesCloudOcr ? "Capture d’une conversation en PNG, JPG ou WebP · 5 Mo max. Après votre accord, l’image est envoyée à OpenAI ; relisez le texte extrait avant de demander des réponses." : "Capture d’une conversation en PNG, JPG ou WebP · 5 Mo max. Extraction locale, puis suppression du fichier temporaire."}</p>
+            {busy === "ocr" && <p className="ocr-note" role="status">Lecture de la capture en cours…</p>}
+            {ocrError && <p className="error" role="alert">{ocrError}</p>}
+            {ocrNotice && <p className="ocr-note" role="status">{ocrNotice}</p>}
             <label className="sr-only" htmlFor="conversation">
               Votre conversation
             </label>
@@ -493,11 +503,6 @@ function App() {
                 {conversation.length.toLocaleString("fr-FR")} / 12 000
               </span>
             </div>
-            {ocrNotice && (
-              <p className="ocr-note" role="status">
-                {ocrNotice}
-              </p>
-            )}
             <label className="check">
               <input
                 type="checkbox"
