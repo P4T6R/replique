@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Réplique · Accès privé</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f5f2e9; color: #302d27; }
+    body { margin: 0; padding: 48px 20px; }
+    main { max-width: 650px; margin: auto; padding: 36px; background: #fffdf8; border: 1px solid #e2ddd0; border-radius: 18px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(2rem, 6vw, 3rem); margin: 0 0 12px; }
+    p { line-height: 1.6; }
+    code { overflow-wrap: anywhere; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #eeeadf; padding: 18px; border-radius: 8px; }
+    a { color: #a1442f; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Réplique</h1>
+    <p>L’atelier est installé sur ce serveur en accès privé. La connexion ChatGPT de cette version utilise un retour OAuth sur votre ordinateur.</p>
+    <p>Sur l’ordinateur qui ouvre ChatGPT, lancez cette commande dans un terminal et laissez-le ouvert&nbsp;:</p>
+    <pre><code>ssh -N -L 127.0.0.1:8000:127.0.0.1:18081 root@replique.duckdns.org</code></pre>
+    <p>Ouvrez ensuite <a href="http://127.0.0.1:8000">Réplique sur cet ordinateur</a> et choisissez « Se connecter avec ChatGPT ».</p>
+    <p>Si Réplique fonctionne déjà sur le port 8000 de votre ordinateur, arrêtez d’abord cette instance locale. Le tunnel nécessite un accès SSH au serveur.</p>
+  </main>
+</body>
+</html>

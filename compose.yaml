@@ -1,0 +1,31 @@
+services:
+  replique:
+    build: .
+    image: replique:local
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    environment:
+      REPLIQUE_MODE: chatgpt
+      REPLIQUE_OAUTH_ENABLED: "1"
+      REPLIQUE_DATA_DIR: /data
+      REPLIQUE_CREDENTIAL_KEY_FILE: /run/secrets/credential.key
+    ports:
+      - "127.0.0.1:18081:8000"
+    volumes:
+      - ./data:/data
+    secrets:
+      - source: credential_key
+        target: credential.key
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 1g
+
+secrets:
+  credential_key:
+    file: ./secrets/credential.key

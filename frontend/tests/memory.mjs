@@ -1,0 +1,78 @@
+import { JSDOM } from 'jsdom';
+import { readFileSync, readdirSync } from 'node:fs';
+import assert from 'node:assert/strict';
+const js = readFileSync('dist/assets/' + readdirSync('dist/assets').find(f => f.endsWith('.js')), 'utf8');
+const wait = () => new Promise(r => setTimeout(r, 75));
+const dom = new JSDOM('<div id="root"></div>', { url: 'http://127.0.0.1:8000/', runScripts: 'outside-only', pretendToBeVisual: true });
+const w = dom.window, d = w.document, calls = [];
+const profile = { length: 'short', register: 'neutral', emoji: 'none' };
+let items = [], revision = 0, savedProfile = null;
+const replies = { mode: 'live', notice: 'Test fictif.', insight: 'Un échange fictif.', boundary: false, replies: [{ id: 'r1', title: 'Simple', text: 'Ça marche, à bientôt.', why: 'Simple.' }] };
+w.fetch = async (url, options = {}) => {
+  calls.push({ url, options }); if (url.startsWith('/api/memory')) assert.equal(options.headers['X-Replique-Request'], '1'); let data = {};
+  if (url === '/api/health') data = { mode: 'live', provider: 'provider.test', ocr_available: false, ocr_languages: [] };
+  else if (url === '/api/auth/status') data = { enabled: false, status: 'disconnected', sharing: false };
+  else if (url === '/api/memory' && options.method === 'DELETE') { items = []; revision++; data = { deleted: true }; }
+  else if (url === '/api/memory') data = { items, profile: savedProfile, revision };
+  else if (url === '/api/memory/items') { const input = JSON.parse(options.body); const item = { ...input, id: 'example-' + items.length }; items.push(item); revision++; data = item; }
+  else if (url.startsWith('/api/memory/preview?')) data = { examples: items.filter(i => i.validated), profile, revision, notice: 'Contexte sélectionné fictif.' };
+  else if (url === '/api/memory/profile') { Object.assign(profile, JSON.parse(options.body)); savedProfile = profile; revision++; data = profile; }
+  else if (url === '/api/memory/export') data = { items, profile: savedProfile, revision };
+  else if (url === '/api/generate') data = { ...replies, memory_used: { item_ids: [], profile_used: false, revision, notice: 'Génération de test.' } };
+  else throw new Error('Unexpected ' + url);
+  return { ok: true, json: async () => data };
+};
+w.URL.createObjectURL = () => 'blob:test'; w.URL.revokeObjectURL = () => {};
+w.HTMLAnchorElement.prototype.click = function () { calls.push({ download: this.download }); };
+Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async () => {} } });
+w.eval(js); await wait();
+const click = async el => { assert.ok(el); el.click(); await wait(); };
+const button = text => [...d.querySelectorAll('button')].find(el => el.textContent.trim() === text);
+const fill = async (el, value) => { const proto = el.tagName === 'SELECT' ? w.HTMLSelectElement.prototype : w.HTMLTextAreaElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value); el.dispatchEvent(new w.Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); await wait(); };
+assert.equal(d.querySelector('#use-memory').checked, false);
+assert.equal(calls.some(c => c.url?.startsWith('/api/memory')), false, 'Temporary use must not read or write memory');
+await click(button('Essayer un exemple')); await click(d.querySelector('.context-sheet .check input')); await click(d.querySelector('.consent input')); await click(d.querySelector('.primary'));
+assert.equal(JSON.parse(calls.find(c => c.url === '/api/generate').options.body).use_memory, false);
+await click(d.querySelector('.copy'));
+assert.equal(calls.some(c => c.url === '/api/memory/items'), false, 'Copy cannot learn or save');
+await fill(d.querySelector('#reply-r1'), 'Voici ma version corrigée.');
+await click(button('Retenir pour mon style'));
+assert.equal(button('Confirmer l’enregistrement').disabled, true);
+await click(d.querySelector('.save-memory .check input')); // explicit validation
+await click(d.querySelectorAll('.save-memory .check input')[1]); // explicit retention review
+await click(button('Confirmer l’enregistrement'));
+assert.equal(items.length, 1); assert.equal(items[0].reply, 'Voici ma version corrigée.'); assert.equal(items[0].conversation, ''); assert.equal(items[0].validated, true); assert.equal(items[0].reviewed, true); assert.equal(items[0].consent, true);
+assert.equal(d.querySelector('#use-memory').checked, false, 'Save cannot turn memory use on');
+await click(button('Retenir pour mon style'));
+await fill(d.querySelector('.save-memory select'), 'out_of_context');
+assert.equal(d.querySelectorAll('.save-memory .check input').length, 1);
+await click(d.querySelector('.save-memory .check input')); await click(button('Confirmer l’enregistrement'));
+assert.equal(items[1].validated, false); assert.equal(items[1].feedback, 'out_of_context'); assert.equal(items[1].rating, 'negative');
+await click(d.querySelector('#use-memory'));
+assert.ok(d.querySelector('.memory-selection').textContent.includes('1 exemple(s)'));
+assert.ok(d.querySelector('.memory-selection').textContent.includes('Voici ma version corrigée.'));
+assert.ok(d.querySelector('.consent').textContent.includes('exemples sauvegardés'));
+assert.equal(d.querySelector('.consent input').checked, false);
+await click(d.querySelector('.consent input')); await click(d.querySelector('.primary'));
+const withMemory = JSON.parse(calls.filter(c => c.url === '/api/generate').at(-1).options.body);
+assert.equal(withMemory.use_memory, true); assert.equal(withMemory.memory_revision, revision); assert.equal(withMemory.consent, true);
+assert.equal(d.querySelector('#use-memory').checked, false, 'Memory permission is for one generation');
+await click(d.querySelector('.memory-panel summary'));
+assert.ok(d.querySelector('.memory-body').textContent.includes('non chiffrée'));
+assert.equal(d.querySelectorAll('.memory-items li').length, 2);
+assert.ok(d.querySelector('.memory-body').textContent.includes('Aucune préférence enregistrée'));
+assert.ok(d.querySelector('[aria-label="Registre mémorisé"]'), 'Fresh null profile must allow first save and show items');
+await fill(d.querySelector('[aria-label="Registre mémorisé"]'), 'familiar'); await click(button('Enregistrer ces préférences'));
+assert.equal(profile.register, 'familiar');
+await click(button('Exporter ma mémoire ↗')); assert.ok(calls.some(c => c.download === 'replique-memoire.json'));
+await click(button('Effacer toute la mémoire'));
+assert.equal(calls.some(c => c.options?.method === 'DELETE'), false, 'Delete must await confirmation');
+await click([...d.querySelectorAll('.memory-confirm button')].find(b => b.textContent === 'Annuler'));
+assert.equal(items.length, 2);
+await click(button('Effacer toute la mémoire')); await click(button('Confirmer la suppression'));
+assert.equal(items.length, 0);
+await click(d.querySelector('.quiet'));
+assert.ok(d.querySelector('.status').textContent.includes('mémoire de style reste conservée'));
+assert.equal(d.querySelector('#use-memory').checked, false);
+console.log('PASS memory DOM: temporary default, no copy capture, edited reply explicit reviewed save, empty excerpt default, validated-only examples, negative feedback excluded, preview + fresh cloud consent + revision, one-generation opt-in, profile edit, export, confirmed delete, reset disclosure. Synthetic API; no browser/provider call.');
+dom.window.close();
