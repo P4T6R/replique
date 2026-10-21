@@ -116,7 +116,11 @@ assert.ok(retry);
 if (mode === "hosted") { assert.ok(retry.disabled); ocrConsent.click(); await waitFor(() => !retry.disabled); }
 ocrFailure = false;
 retry.click();
+await waitFor(() => document.querySelector("#photo-preview")?.textContent.includes("Bonjour depuis la capture"));
+assert.equal(conversation.value, "Moi : Salut\nAutre personne : Bonjour");
+document.querySelector(".photo-actions button").click();
 await waitFor(() => conversation.value.includes("Bonjour depuis la capture"));
+assert.match(conversation.value, /Moi : Salut\nAutre personne : Bonjour/);
 assert.ok(document.querySelector(".compose .primary").disabled);
 console.log(`PASS ${mode} beta UI: invitation, consent, HEIC photo retry, preserved draft, no visitor ChatGPT login.`);
 dom.window.close();

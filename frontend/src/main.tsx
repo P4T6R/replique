@@ -31,6 +31,8 @@ type Result = {
   replies: Reply[];
   memory_used?: { item_ids: string[]; profile_used: boolean; revision: number; notice: string };
 };
+type ExtractedPhoto = { text: string; warning?: string };
+type ResultContext = { conversation: string; intent: string; tone: string; locale: string };
 const intentions = [
   "répondre naturellement",
   "relancer",
@@ -46,7 +48,13 @@ const unanswered = "Autre personne : On se reparle plus tard.\nMoi : D’accord,
 const sample =
   "Moi : Ça m’a fait plaisir de discuter avec toi !\nAutre personne : Moi aussi, c’était sympa. On remet ça ?";
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const r = await fetch(url, options);
+  let r: Response;
+  try {
+    r = await fetch(url, options);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new HttpRequestError("Connexion au service impossible. Vérifiez votre réseau, puis réessayez.", 0);
+  }
   let data;
   try {
     data = await r.json();
@@ -99,8 +107,13 @@ function App() {
     [ocrNotice, setOcrNotice] = useState("");
   const [ocrError, setOcrError] = useState("");
   const [retryablePhoto, setRetryablePhoto] = useState(false);
+  const [extractedPhoto, setExtractedPhoto] = useState<ExtractedPhoto | null>(null);
+  const [resultStale, setResultStale] = useState(false);
+  const [resultContext, setResultContext] = useState<ResultContext | null>(null);
+  const [resetPrompt, setResetPrompt] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<{ id: string; message: string } | null>(null);
   const [useMemory, setUseMemory] = useState(false), [memoryPreview, setMemoryPreview] = useState<MemoryPreview | null>(null), [memoryError, setMemoryError] = useState(""), [memoryRevision, setMemoryRevision] = useState(0);
-  const memoryChanged = () => { setMemoryRevision(v => v + 1); setConsent(false); setUseMemory(false); setMemoryPreview(null); };
+  const memoryChanged = () => { setMemoryRevision(v => v + 1); setConsent(false); setUseMemory(false); setMemoryPreview(null); setResultStale(true); };
   useEffect(() => {
     let current = true; setConsent(false); setMemoryPreview(null); setMemoryError("");
     if (useMemory) memoryRequest<MemoryPreview>("/api/memory/preview?" + new URLSearchParams({ intent, tone, locale })).then(data => { if (current) setMemoryPreview(data); }).catch(e => { if (current) setMemoryError((e as Error).message); });
@@ -127,6 +140,7 @@ function App() {
       if (error instanceof HttpRequestError && error.status === 401) {
         setAccount(null);
         setResult(null);
+        setResultContext(null);
         setConversation("");
         setAccountError("");
       } else {
@@ -191,6 +205,7 @@ function App() {
       setUseMemory(false);
       setMemoryPreview(null);
       setResult(null);
+      setResultContext(null);
       setWelcome(false);
       setNotice(data.remote_revoked ? "Compte ChatGPT déconnecté." : "Connexion locale effacée. Vérifiez les autorisations de Réplique dans les réglages ChatGPT pour révoquer son accès.");
       connect();
@@ -217,11 +232,17 @@ function App() {
   function updateConversation(value: string) {
     pendingPhoto.current = null;
     setRetryablePhoto(false);
+    setExtractedPhoto(null);
     setConversation(value);
     setConfirmed(false);
     setConsent(false);
     setResult(null);
+    setResultContext(null);
+    setResultStale(false);
+    setCopyStatus(null);
     setError("");
+    setOcrError("");
+    setOcrNotice("");
   }
   function reset() {
     generation.current++;
@@ -240,10 +261,15 @@ function App() {
     setUseMemory(false);
     setMemoryPreview(null);
     setResult(null);
+    setResultContext(null);
+    setResultStale(false);
+    setResetPrompt(false);
+    setCopyStatus(null);
     setError("");
     setOcrNotice("");
     setOcrError("");
     setRetryablePhoto(false);
+    setExtractedPhoto(null);
     pendingPhoto.current = null;
     setNotice(
       isHosted
@@ -254,15 +280,14 @@ function App() {
   }
   async function generate(e: React.FormEvent) {
     e.preventDefault();
-    if (busy || authBusy || !health || !confirmed || (health.mode === "chatgpt" && (!auth?.sharing || auth.status !== "connected" || !model)) || (isHosted && (!account || (!account.subscription_active && account.trial_remaining === 0)))) return;
-    if (useMemory && !memoryPreview) return;
+    if (!health || !canGenerate) return;
+    const currentContext = { conversation, intent, tone, locale };
     const id = ++generation.current;
     abort.current?.abort();
     abort.current = new AbortController();
     setBusy("generate");
     setError("");
     setNotice("");
-    setResult(null);
     try {
       const data = await request<Result>("/api/generate", {
         method: "POST",
@@ -286,6 +311,9 @@ function App() {
       if (id === generation.current) {
         setAbstention(data.replies.every((r) => !r.text.trim()));
         setResult(data);
+        setResultContext(currentContext);
+        setResultStale(false);
+        setCopyStatus(null);
         setUseMemory(false);
         setConsent(false);
         setTimeout(() => results.current?.focus(), 0);
@@ -321,6 +349,7 @@ function App() {
     }
     pendingPhoto.current = f;
     setRetryablePhoto(false);
+    setExtractedPhoto(null);
     const id = ++generation.current;
     abort.current?.abort();
     abort.current = new AbortController();
@@ -343,12 +372,15 @@ function App() {
         signal: abort.current.signal,
       });
       if (id === generation.current) {
-        updateConversation(data.text);
-        setOcrNotice(
-          data.warning ||
-            "Texte extrait. Relisez-le, attribuez les messages, confirmez la relecture et l’envoi du texte, puis cliquez sur « Trouver mes mots ».",
-        );
-        setTimeout(() => document.querySelector<HTMLTextAreaElement>("#conversation")?.focus(), 0);
+        if (conversation.trim()) {
+          setExtractedPhoto(data);
+          setOcrNotice("Texte extrait. Choisissez si vous voulez l’ajouter ou remplacer votre brouillon ; rien n’a encore été modifié.");
+          setTimeout(() => document.querySelector<HTMLElement>("#photo-preview")?.focus(), 0);
+        } else {
+          updateConversation(data.text);
+          setOcrNotice(data.warning || "Texte extrait. Relisez-le et vérifiez qui a écrit chaque message avant de continuer.");
+          setTimeout(() => document.querySelector<HTMLTextAreaElement>("#conversation")?.focus(), 0);
+        }
       }
     } catch (e) {
       if (
@@ -366,13 +398,22 @@ function App() {
       }
     }
   }
-  async function copy(text: string) {
+  function applyPhoto(choice: "append" | "replace") {
+    if (!extractedPhoto) return;
+    const next = choice === "append" ? conversation.trimEnd() + "\n\n" + extractedPhoto.text : extractedPhoto.text;
+    updateConversation(next);
+    setOcrNotice(extractedPhoto.warning || "Texte ajouté. Relisez-le et vérifiez qui a écrit chaque message avant de continuer.");
+    setTimeout(() => document.querySelector<HTMLTextAreaElement>("#conversation")?.focus(), 0);
+  }
+  async function copy(id: string, value: string) {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(value);
+      setCopyStatus({ id, message: "Copié" });
       setNotice(
         "Réponse copiée. Relisez-la dans votre messagerie avant de l’envoyer.",
       );
     } catch {
+      setCopyStatus({ id, message: "Copie impossible. Sélectionnez le texte ci-dessous." });
       setNotice(
         "Copie indisponible. Sélectionnez la réponse et copiez-la manuellement.",
       );
@@ -396,14 +437,40 @@ function App() {
       "Réponses exportées. Ce fichier reste sur votre appareil après effacement de la session.",
     );
   }
+  const generationBlock = (() => {
+    if (!health) return "Vérification du service en cours.";
+    if (authBusy) return "Connexion en cours.";
+    if (busy === "ocr") return "Lecture de la photo en cours.";
+    if (busy === "generate") return "Génération en cours.";
+    if (isHosted && !account) return "Connectez-vous ou créez un compte pour continuer.";
+    if (isHosted && account && !account.subscription_active && account.trial_remaining === 0) return "Vos crédits d’essai sont épuisés.";
+    if (health.mode === "chatgpt" && (!auth?.sharing || auth.status !== "connected" || !model)) return "Connectez ChatGPT et choisissez un modèle.";
+    if (conversation.trim().length < 5) return "Ajoutez le message auquel vous voulez répondre.";
+    if (health.mode === "demo" && ![sample, brief, unanswered, refusal].includes(conversation)) return "La démo accepte uniquement les exemples fictifs proposés.";
+    if (!/^\s*Autre personne\s*:/im.test(conversation)) return "Indiquez au moins un message commençant par « Autre personne : ».";
+    if (!confirmed) return "Relisez l’échange et cochez la confirmation sous le texte.";
+    if (useMemory && memoryError) return "La mémoire est indisponible. Désactivez son utilisation ou réessayez.";
+    if (useMemory && !memoryPreview) return "Vérification de votre mémoire en cours.";
+    if (health.mode !== "demo" && !consent) return "Confirmez le traitement du texte avant de continuer.";
+    return null;
+  })();
+  const canGenerate = generationBlock === null;
+  const generationHint = generationBlock || "Prêt à générer trois propositions. Une génération peut utiliser un crédit d’essai.";
+  const photoHint = health && !health.ocr_available ? "La lecture des photos est indisponible sur ce serveur. Vous pouvez coller le texte à la place."
+    : isHosted && !account ? "Connectez-vous pour importer une photo."
+      : isHosted && account && !account.subscription_active && account.trial_remaining === 0 ? "Vos crédits d’essai sont épuisés ; l’import de photos est suspendu."
+        : health?.mode === "chatgpt" && (auth?.status !== "connected" || !auth.sharing || !model) ? "Connectez ChatGPT et choisissez un modèle pour importer une photo."
+      : usesCloudOcr && !ocrConsent ? "Cochez l’autorisation ci-dessus pour activer l’import de la photo."
+        : "";
   return (
     <div className="app">
       <a className="skip-link" href="#conversation">Aller à la conversation</a>
       <header className="topbar">
         <a className="brand" href="#atelier" aria-label="Réplique, accueil"><span className="brand-mark" aria-hidden="true">r</span>réplique<span className="brand-period">.</span></a>
         <span className="brand-caption">L’ATELIER DES CONVERSATIONS</span>
-        <button className="quiet" onClick={reset} disabled={authBusy} aria-label="Effacer la session et commencer une nouvelle conversation">Nouvelle conversation <span aria-hidden="true">＋</span></button>
+        <button className="quiet" onClick={() => conversation.trim() || result || style.trim() ? setResetPrompt(true) : reset()} disabled={authBusy} aria-label="Effacer la session et commencer une nouvelle conversation">Nouvelle conversation <span aria-hidden="true">＋</span></button>
       </header>
+      {resetPrompt && <div className="reset-confirm" role="group" aria-label="Confirmer une nouvelle conversation"><p>Effacer le brouillon et les réponses de cette session ?</p><div><button type="button" className="text-button" onClick={reset}>Effacer et recommencer</button><button type="button" className="text-button" onClick={() => setResetPrompt(false)}>Garder ma conversation</button></div></div>}
       <main id="atelier">
         <section className="intro">
           <div><p className="eyebrow">UN MESSAGE PEUT TOUT CHANGER. RESTEZ VOUS-MÊME.</p><h1>Ça se dit.<br /><em>À votre façon.</em><span className="heading-star" aria-hidden="true">✳</span></h1></div>
@@ -415,7 +482,7 @@ function App() {
             {connection} <button onClick={connect}>Réessayer</button>
           </div>
         )}
-        {isHosted ? <><AccountPanel account={account} provider={health?.mode === "hosted" ? "openai" : "local"} onChange={next => { reset(); setAccount(next); setAccountError(""); }} />{accountError && <p className="error" role="alert">{accountError} <button type="button" onClick={() => void refreshAccount()}>Réessayer</button></p>}</> : health && <details className="account-disclosure" open={!!authError || auth?.status === "reauth_required"}><summary><span className="account-summary-icon" aria-hidden="true">◎</span><span>{auth?.status === "connected" ? "Votre compte ChatGPT est connecté" : "Envie d’utiliser vos propres conversations ?"}<small>{auth?.status === "connected" ? "Compte, modèles et utilisation" : "Connexion ChatGPT et état du service"}</small></span><span className="disclosure-plus" aria-hidden="true">＋</span></summary>
+        {isHosted ? <><AccountPanel account={account} provider={health?.mode === "hosted" ? "openai" : "local"} disabled={!!busy} onChange={next => { reset(); setAccount(next); setAccountError(""); }} />{accountError && <p className="error" role="alert">{accountError} <button type="button" onClick={() => void refreshAccount()}>Réessayer</button></p>}</> : health && <details className="account-disclosure" open={!!authError || auth?.status === "reauth_required"}><summary><span className="account-summary-icon" aria-hidden="true">◎</span><span>{auth?.status === "connected" ? "Votre compte ChatGPT est connecté" : "Envie d’utiliser vos propres conversations ?"}<small>{auth?.status === "connected" ? "Compte, modèles et utilisation" : "Connexion ChatGPT et état du service"}</small></span><span className="disclosure-plus" aria-hidden="true">＋</span></summary>
         <section className="account-panel" aria-labelledby="account-title" aria-busy={authBusy}>
           <div>
             <div className="eyebrow">VOTRE COMPTE</div>
@@ -488,6 +555,7 @@ function App() {
               />
             </div>
             <p className="upload-info">{usesCloudOcr ? "Capture ou photo PNG, JPG, WebP ou HEIC · 10 Mo max. Après votre accord, l’image est envoyée à OpenAI ; relisez le texte extrait avant de demander des réponses." : "Capture ou photo PNG, JPG, WebP ou HEIC · 10 Mo max. Extraction locale, puis suppression du fichier temporaire."}</p>
+            {photoHint && <p className="upload-hint" role="status">{photoHint}</p>}
             {busy === "ocr" && <p className="ocr-note" role="status">Lecture de la capture en cours…</p>}
             {ocrError && <div className="error" role="alert">{ocrError} Votre texte saisi reste disponible.
               {retryablePhoto && <><br />{usesCloudOcr && !ocrConsent && <span>Pour réessayer cette même photo, autorisez à nouveau son envoi ci-dessus. </span>}
@@ -495,6 +563,17 @@ function App() {
               </>}
             </div>}
             {ocrNotice && <p className="ocr-note" role="status">{ocrNotice}</p>}
+            {extractedPhoto && <div id="photo-preview" className="photo-preview" tabIndex={-1} aria-label="Texte extrait de la photo">
+              <strong>Texte lu sur la photo</strong>
+              <p>Votre brouillon actuel est conservé. Vérifiez le texte ci-dessous avant de choisir.</p>
+              <pre>{extractedPhoto.text}</pre>
+              <div className="photo-actions">
+                <button type="button" disabled={!!busy || conversation.trimEnd().length + 2 + extractedPhoto.text.length > 12000} onClick={() => applyPhoto("append")}>Ajouter au brouillon</button>
+                <button type="button" disabled={!!busy} onClick={() => applyPhoto("replace")}>Remplacer le brouillon</button>
+                <button type="button" disabled={!!busy} onClick={() => { setExtractedPhoto(null); setOcrNotice("Texte extrait ignoré. Votre brouillon est conservé."); }}>Ignorer</button>
+              </div>
+              {conversation.trimEnd().length + 2 + extractedPhoto.text.length > 12000 && <p>Le texte réuni dépasserait 12 000 caractères. Raccourcissez le brouillon ou remplacez-le.</p>}
+            </div>}
             <label className="sr-only" htmlFor="conversation">
               Votre conversation
             </label>
@@ -545,7 +624,7 @@ function App() {
               value={intent}
               onChange={(e) => {
                 setIntent(e.target.value);
-                setResult(null);
+                setResultStale(true);
                 setConsent(false);
               }}
             >
@@ -568,7 +647,7 @@ function App() {
                       checked={tone === t}
                       onChange={() => {
                         setTone(t);
-                        setResult(null);
+                        setResultStale(true);
                         setConsent(false);
                       }}
                     />
@@ -579,9 +658,9 @@ function App() {
             </fieldset>
             <details className="personalize"><summary>Affiner ma façon d’écrire <span aria-hidden="true">＋</span></summary><div className="personalize-body">
             <label className="field-label" htmlFor="locale">Le contexte linguistique</label>
-            <select id="locale" disabled={!!busy} value={locale} onChange={(e) => { setLocale(e.target.value); setResult(null); setConsent(false); }}><option value="fr_neutre">Français neutre</option><option value="afrique_ouest">Français · Afrique de l’Ouest</option><option value="burkina_faso">Français · contexte Burkina Faso</option></select>
+            <select id="locale" disabled={!!busy} value={locale} onChange={(e) => { setLocale(e.target.value); setResultStale(true); setConsent(false); }}><option value="fr_neutre">Français neutre</option><option value="afrique_ouest">Français · Afrique de l’Ouest</option><option value="burkina_faso">Français · contexte Burkina Faso</option></select>
             <label className="field-label" htmlFor="familiarity">Le degré de familiarité</label>
-            <select id="familiarity" disabled={!!busy} value={familiarity} onChange={(e) => { setFamiliarity(e.target.value); setResult(null); setConsent(false); }}><option value="neutre">Courant, sans familiarité ajoutée</option><option value="familier">Familier, si l’échange s’y prête</option></select>
+            <select id="familiarity" disabled={!!busy} value={familiarity} onChange={(e) => { setFamiliarity(e.target.value); setResultStale(true); setConsent(false); }}><option value="neutre">Courant, sans familiarité ajoutée</option><option value="familier">Familier, si l’échange s’y prête</option></select>
             <p className="preference-help">Votre façon d’écrire passe avant les expressions régionales. Aucun accent ni argot forcé.</p>
             <label className="field-label" htmlFor="style">
               Votre façon d’écrire <span>facultatif</span>
@@ -594,7 +673,7 @@ function App() {
               value={style}
               onChange={(e) => {
                 setStyle(e.target.value);
-                setResult(null);
+                setResultStale(true);
                 setConsent(false);
               }}
               placeholder="Ex. Des phrases courtes, pas de surnoms. Je dis souvent « ça marche »."
@@ -606,7 +685,7 @@ function App() {
                 checked={emoji}
                 onChange={(e) => {
                   setEmoji(e.target.checked);
-                  setResult(null);
+                  setResultStale(true);
                   setConsent(false);
                 }}
               />
@@ -615,11 +694,11 @@ function App() {
             </div></details>
             </div>
             {health && (!isHosted || account) && <><MemoryPanel key={isHosted ? account?.email : "local"} hosted={isHosted} revision={memoryRevision} changed={memoryChanged} disabled={!!busy || authBusy} />
-            <div className="memory-use"><label className="check"><input id="use-memory" type="checkbox" checked={useMemory} disabled={!!busy || authBusy} onChange={e => { setUseMemory(e.target.checked); setConsent(false); }} /><span>Utiliser ma mémoire pour cette génération seulement</span></label><p className="preference-help">Désactivé par défaut. Enregistrer un exemple et l’utiliser sont deux choix séparés.</p>
+            <div className="memory-use"><label className="check"><input id="use-memory" type="checkbox" checked={useMemory} disabled={!!busy || authBusy} onChange={e => { setUseMemory(e.target.checked); setConsent(false); setResultStale(true); }} /><span>Utiliser ma mémoire pour cette génération seulement</span></label><p className="preference-help">Désactivé par défaut. Enregistrer un exemple et l’utiliser sont deux choix séparés.</p>
             {useMemory && <div className="memory-selection" aria-live="polite">{memoryError ? <p className="error" role="alert">{memoryError}</p> : memoryPreview ? <><p>{memoryPreview.examples.length} exemple(s) validé(s) sélectionné(s){memoryPreview.profile ? " et vos préférences enregistrées" : ""}.</p>{memoryPreview.examples.map(item => <details key={item.id}><summary>Voir l’exemple sélectionné</summary><p>{item.reply}</p>{item.conversation && <p>Extrait : {item.conversation}</p>}</details>)}{memoryPreview.profile && <p>Préférences : {memoryPreview.profile.length === "short" ? "phrases courtes" : "longueur équilibrée"}, {memoryPreview.profile.register === "familiar" ? "familier si adapté" : "registre courant"}, {memoryPreview.profile.emoji === "allowed" ? "emoji si adapté" : "sans emoji"}.</p>}<p>{memoryPreview.notice}</p></> : <p>Vérification des exemples à utiliser…</p>}</div>}</div></>}
             {health?.mode === "chatgpt" && <div className="model-field">
               <label className="field-label" htmlFor="model">Modèle · forfait ChatGPT</label>
-              <select id="model" value={model} disabled={!!busy || authBusy || !models.length} onChange={(e) => { setModel(e.target.value); setResult(null); setConsent(false); setOcrConsent(false); setUseMemory(false); setMemoryPreview(null); }}>
+              <select id="model" value={model} disabled={!!busy || authBusy || !models.length} onChange={(e) => { setModel(e.target.value); setResultStale(true); setConsent(false); setOcrConsent(false); setUseMemory(false); setMemoryPreview(null); }}>
                 {!models.length && <option value="">Aucun modèle disponible</option>}
                 {models.map((m) => <option key={m.slug} value={m.slug}>{m.display_name}</option>)}
               </select>
@@ -644,17 +723,7 @@ function App() {
             )}
             <button
               className="primary"
-              disabled={
-                !health ||
-                !!busy ||
-                authBusy ||
-                (isHosted && (!account || (!account.subscription_active && account.trial_remaining === 0))) ||
-                (health.mode === "chatgpt" && (!auth?.sharing || auth.status !== "connected" || !model)) ||
-                (useMemory && !memoryPreview) ||
-                !confirmed ||
-                !conversation.trim() ||
-                (health.mode !== "demo" && !consent)
-              }
+              disabled={!canGenerate}
             >
               {busy === "ocr"
                 ? "Lecture de la capture…"
@@ -663,6 +732,7 @@ function App() {
                   : "Trouver mes mots"}{" "}
               <span aria-hidden="true">↗</span>
             </button>
+            <p className="generation-hint" role="status">{generationHint}</p>
             {error && (
               <p className="error" role="alert">
                 {error}
@@ -710,6 +780,8 @@ function App() {
             </div>
             {result ? (
               <>
+                {resultStale && <p className="outdated-note" role="status">Ces réponses ont été créées avec vos réglages précédents. Vous pouvez encore les copier ou les modifier ; relancez la génération pour appliquer les nouveaux réglages.</p>}
+                {busy === "generate" && <p className="outdated-note" role="status">Nouvelles propositions en cours. Les réponses précédentes restent disponibles.</p>}
                 <div
                   className="insight"
                 >
@@ -729,9 +801,9 @@ function App() {
                         <button
                           className="copy"
                           disabled={!r.text.trim()}
-                          onClick={() => copy(r.text)}
+                          onClick={() => copy(r.id, r.text)}
                         >
-                          Copier <span aria-hidden="true">↗</span>
+                          {copyStatus?.id === r.id && copyStatus.message === "Copié" ? "Copié" : "Copier"} <span aria-hidden="true">↗</span>
                         </button>
                       </div>
                       <label className="sr-only" htmlFor={"reply-" + r.id}>
@@ -739,10 +811,12 @@ function App() {
                       </label>
                       <textarea
                         id={"reply-" + r.id}
+                        disabled={busy === "generate"}
                         placeholder="Ne pas envoyer de message"
                         value={r.text}
                         maxLength={1500}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          setCopyStatus(null);
                           setResult({
                             ...result,
                             replies: result.replies.map((x) =>
@@ -750,10 +824,11 @@ function App() {
                                 ? { ...x, text: e.target.value }
                                 : x,
                             ),
-                          })
-                        }
+                          });
+                        }}
                       />
-                      {health && (!isHosted || account) && <SaveMemory hosted={isHosted} reply={r.text} conversation={conversation} intent={intent} tone={tone} locale={locale} changed={memoryChanged} />}
+                      {copyStatus?.id === r.id && <p className="copy-feedback" role="status">{copyStatus.message}</p>}
+                      {health && (!isHosted || account) && <SaveMemory hosted={isHosted} reply={r.text} conversation={resultContext?.conversation || conversation} intent={resultContext?.intent || intent} tone={resultContext?.tone || tone} locale={resultContext?.locale || locale} changed={memoryChanged} />}
                       <p className="why">
                         <span>Ce que ça change</span>
                         {r.why}

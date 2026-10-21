@@ -116,6 +116,9 @@ assert.equal(
   d.querySelector(".reply textarea").value,
   "Ma version personnelle.",
 );
+await click([...d.querySelectorAll(".tone input")].find(input => input.value === "chaleureux"));
+assert.equal(d.querySelector(".reply textarea").value, "Ma version personnelle.");
+assert.match(d.querySelector(".outdated-note").textContent, /réglages précédents/);
 fill(
   w,
   d.querySelector("#conversation"),
@@ -127,6 +130,11 @@ assert.equal(button().disabled, true);
 await click(d.querySelector(".check input"));
 await click(button());
 await click(d.querySelector(".quiet"));
+assert.equal(d.querySelector("#conversation").value, "Moi : Bonjour\nAutre personne : Salut");
+await click([...d.querySelectorAll(".reset-confirm button")].find(button => button.textContent.includes("Garder")));
+assert.equal(d.querySelector("#conversation").value, "Moi : Bonjour\nAutre personne : Salut");
+await click(d.querySelector(".quiet"));
+await click([...d.querySelectorAll(".reset-confirm button")].find(button => button.textContent.includes("Effacer")));
 test.resolve();
 await wait();
 assert.equal(d.querySelector("#conversation").value, "");
@@ -251,11 +259,13 @@ assert.ok(regional.d.querySelector('#locale').disabled);assert.ok(regional.d.que
 regional.resolve();await wait();
 fill(regional.w, regional.d.querySelector('.reply textarea'), '');await wait();
 assert.equal(regional.d.querySelectorAll('.reply').length,3, 'An edited reply must not disappear when its text is cleared');
-await click(regional.d.querySelector('.quiet'));assert.equal(regional.d.querySelector('#locale').value,'fr_neutre');assert.equal(regional.d.querySelector('#familiarity').value,'neutre');regional.dom.window.close();
+await click(regional.d.querySelector('.quiet'));
+await click([...regional.d.querySelectorAll('.reset-confirm button')].find(button => button.textContent.includes('Effacer')));
+assert.equal(regional.d.querySelector('#locale').value,'fr_neutre');assert.equal(regional.d.querySelector('#familiarity').value,'neutre');regional.dom.window.close();
 const abstain=await setup();
 abstain.w.fetch=async()=>({ok:true,json:async()=>({...response,boundary:true,replies:response.replies.map(r=>({...r,text:''}))})});
 assert.ok(![...abstain.d.querySelectorAll('button')].some(b=>b.textContent.trim()==='Une limite claire'));
-fill(abstain.w,abstain.d.querySelector('#conversation'),'Moi : Je voulais reprendre la discussion.\nAutre personne : Ne me contacte plus.');await wait();
+await click([...abstain.d.querySelectorAll('button')].find(button => button.textContent.trim() === 'Un refus'));
 await click(abstain.d.querySelector('.check input'));await click(abstain.d.querySelector('.primary'));await wait();
 assert.match(abstain.d.querySelector('.answers h2').textContent,/Une piste pour la suite/);assert.equal(abstain.d.querySelector('.pause-card,.boundary,.final-note'),null);assert.match(abstain.d.querySelector('.insight p').textContent,/Cette personne demande de ne plus être contactée. Le mieux est de ne pas répondre./);assert.equal(abstain.d.querySelector('.insight .eyebrow').textContent.trim(),'LE POINT DE REPÈRE');assert.equal(abstain.d.querySelectorAll('.reply').length,0);assert.equal(abstain.d.querySelectorAll('.copy,.export').length,0);abstain.dom.window.close();
 console.log('PASS: regional preferences, familiarity request contract, busy locks, reset defaults, empty edit retained and discreet inline advice without copy/export.');

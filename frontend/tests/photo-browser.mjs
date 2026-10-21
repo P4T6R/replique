@@ -38,11 +38,15 @@ try {
   await page.getByRole("alert").filter({ hasText: "Lecture temporairement indisponible." }).waitFor();
   assert.equal(await conversation.inputValue(), draft);
   await page.getByRole("button", { name: "Réessayer la lecture" }).click();
+  await page.locator("#photo-preview").getByText(/Bonjour/).waitFor();
+  assert.equal(await conversation.inputValue(), draft);
+  await page.getByRole("button", { name: "Ajouter au brouillon" }).click();
   await page.waitForFunction(() => document.querySelector("#conversation")?.value.includes("Bonjour"));
+  assert.match(await conversation.inputValue(), /Je voudrais répondre/);
   assert.match(await conversation.inputValue(), /Bonjour/);
   assert.equal(await page.getByLabel("J’ai relu le texte").isChecked(), false);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-  console.log("PASS mobile browser: failed upload keeps draft; retry extracts real PNG text and requires review.");
+  console.log("PASS mobile browser: failed upload keeps draft; retry extracts real PNG text; appending requires review.");
 } finally {
   await browser.close();
 }

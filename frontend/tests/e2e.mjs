@@ -42,6 +42,8 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "../evidence/mobile.png", fullPage: true });
   await page.getByRole("button", { name: "Effacer la session et commencer une nouvelle conversation" }).click();
+  assert.match(await page.getByLabel("Votre conversation", { exact: true }).inputValue(), /Autre personne/);
+  await page.getByRole("button", { name: "Effacer et recommencer" }).click();
   assert.equal(
     await page.getByLabel("Votre conversation", { exact: true }).inputValue(),
     "",

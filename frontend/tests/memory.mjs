@@ -25,7 +25,8 @@ w.fetch = async (url, options = {}) => {
 w.URL.createObjectURL = () => 'blob:test'; w.URL.revokeObjectURL = () => {};
 w.HTMLAnchorElement.prototype.click = function () { calls.push({ download: this.download }); };
 Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async () => {} } });
-w.eval(js); await wait();
+w.eval(js);
+for (let attempt = 0; attempt < 30 && !d.querySelector('#use-memory'); attempt++) await wait();
 const click = async el => { assert.ok(el); el.click(); await wait(); };
 const button = text => [...d.querySelectorAll('button')].find(el => el.textContent.trim() === text);
 const fill = async (el, value) => { const proto = el.tagName === 'SELECT' ? w.HTMLSelectElement.prototype : w.HTMLTextAreaElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value); el.dispatchEvent(new w.Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); await wait(); };
@@ -34,14 +35,18 @@ assert.equal(calls.some(c => c.url?.startsWith('/api/memory')), false, 'Temporar
 await click(button('Essayer un exemple')); await click(d.querySelector('.context-sheet .check input')); await click(d.querySelector('.consent input')); await click(d.querySelector('.primary'));
 assert.equal(JSON.parse(calls.find(c => c.url === '/api/generate').options.body).use_memory, false);
 await click(d.querySelector('.copy'));
+assert.equal(d.querySelector('.copy-feedback')?.textContent, 'Copié');
 assert.equal(calls.some(c => c.url === '/api/memory/items'), false, 'Copy cannot learn or save');
 await fill(d.querySelector('#reply-r1'), 'Voici ma version corrigée.');
+assert.equal(d.querySelector('.copy-feedback'), null, 'Editing a copied reply clears the copy confirmation');
+await click([...d.querySelectorAll('.tone input')].find(input => input.value === 'chaleureux'));
+assert.equal(d.querySelector('#reply-r1').value, 'Voici ma version corrigée.', 'Changing a preference keeps the earlier edited reply');
 await click(button('Retenir pour mon style'));
 assert.equal(button('Confirmer l’enregistrement').disabled, true);
 await click(d.querySelector('.save-memory .check input')); // explicit validation
 await click(d.querySelectorAll('.save-memory .check input')[1]); // explicit retention review
 await click(button('Confirmer l’enregistrement'));
-assert.equal(items.length, 1); assert.equal(items[0].reply, 'Voici ma version corrigée.'); assert.equal(items[0].conversation, ''); assert.equal(items[0].validated, true); assert.equal(items[0].reviewed, true); assert.equal(items[0].consent, true);
+assert.equal(items.length, 1); assert.equal(items[0].reply, 'Voici ma version corrigée.'); assert.equal(items[0].conversation, ''); assert.equal(items[0].tone, 'naturel', 'Saved style keeps the setting used for this result'); assert.equal(items[0].validated, true); assert.equal(items[0].reviewed, true); assert.equal(items[0].consent, true);
 assert.equal(d.querySelector('#use-memory').checked, false, 'Save cannot turn memory use on');
 await click(button('Retenir pour mon style'));
 await fill(d.querySelector('.save-memory select'), 'out_of_context');
@@ -72,6 +77,7 @@ assert.equal(items.length, 2);
 await click(button('Effacer toute la mémoire')); await click(button('Confirmer la suppression'));
 assert.equal(items.length, 0);
 await click(d.querySelector('.quiet'));
+await click([...d.querySelectorAll('.reset-confirm button')].find(button => button.textContent.includes('Effacer')));
 assert.ok(d.querySelector('.status').textContent.includes('mémoire de style reste conservée'));
 assert.equal(d.querySelector('#use-memory').checked, false);
 console.log('PASS memory DOM: temporary default, no copy capture, edited reply explicit reviewed save, empty excerpt default, validated-only examples, negative feedback excluded, preview + fresh cloud consent + revision, one-generation opt-in, profile edit, export, confirmed delete, reset disclosure. Synthetic API; no browser/provider call.');

@@ -12,22 +12,30 @@ type Props = {
   account: AccountStatus | null;
   onChange: (account: AccountStatus | null) => void;
   provider: "local" | "openai";
+  disabled?: boolean;
 };
 
 const headers = { "Content-Type": "application/json", "X-Replique-Request": "1" };
 
 async function accountRequest(path: string, body?: object): Promise<AccountStatus | null> {
-  const response = await fetch("/api/account/" + path, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body || {}),
-  });
-  const data = await response.json();
+  let response: Response;
+  try {
+    response = await fetch("/api/account/" + path, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body || {}),
+    });
+  } catch {
+    throw new Error("Connexion au service impossible. Vérifiez votre réseau, puis réessayez.");
+  }
+  let data;
+  try { data = await response.json(); }
+  catch { throw new Error("Le serveur ne répond pas correctement. Réessayez dans un instant."); }
   if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Réessayez dans un instant.");
   return path === "logout" ? null : data as AccountStatus;
 }
 
-export function AccountPanel({ account, onChange, provider }: Props) {
+export function AccountPanel({ account, onChange, provider, disabled = false }: Props) {
   const [registering, setRegistering] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -37,6 +45,7 @@ export function AccountPanel({ account, onChange, provider }: Props) {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (disabled || busy) return;
     setBusy(true);
     setError("");
     try {
@@ -52,6 +61,7 @@ export function AccountPanel({ account, onChange, provider }: Props) {
   }
 
   async function logout() {
+    if (disabled || busy) return;
     setBusy(true);
     setError("");
     try {
@@ -73,14 +83,14 @@ export function AccountPanel({ account, onChange, provider }: Props) {
       <p className="preference-help">{provider === "openai" ? "Réplique transmet les conversations confirmées à OpenAI pour générer les réponses. Aucun compte ChatGPT personnel n’est demandé aux testeurs." : "Le modèle fonctionne sur le serveur Réplique. Aucun compte ChatGPT n’est nécessaire."}</p>
     </div>
     <div className="trial-account-actions">
-      {account ? <button type="button" className="text-button" disabled={busy} onClick={logout}>Se déconnecter</button> : <>
+      {account ? <button type="button" className="text-button" disabled={busy || disabled} onClick={logout}>Se déconnecter</button> : <>
         <form onSubmit={submit}>
-          <label>Adresse e-mail<input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} disabled={busy} /></label>
-          <label>Mot de passe<input type="password" minLength={registering ? 12 : undefined} autoComplete={registering ? "new-password" : "current-password"} required value={password} onChange={event => setPassword(event.target.value)} disabled={busy} /></label>
-          {registering && <label>Code d’invitation<input type="text" autoComplete="off" required value={invitation} onChange={event => setInvitation(event.target.value)} disabled={busy} /></label>}
-          <button type="submit" className="primary" disabled={busy}>{busy ? "Veuillez patienter…" : registering ? "Créer mon compte" : "Se connecter"}</button>
+          <label>Adresse e-mail<input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} disabled={busy || disabled} /></label>
+          <label>Mot de passe<input type="password" minLength={registering ? 12 : undefined} autoComplete={registering ? "new-password" : "current-password"} required value={password} onChange={event => setPassword(event.target.value)} disabled={busy || disabled} /></label>
+          {registering && <label>Code d’invitation<input type="text" autoComplete="off" required value={invitation} onChange={event => setInvitation(event.target.value)} disabled={busy || disabled} /></label>}
+          <button type="submit" className="primary" disabled={busy || disabled}>{busy ? "Veuillez patienter…" : registering ? "Créer mon compte" : "Se connecter"}</button>
         </form>
-        <button type="button" className="text-button" disabled={busy} onClick={() => { setRegistering(!registering); setError(""); }}>{registering ? "J’ai déjà un compte" : "J’ai un code d’invitation"}</button>
+        <button type="button" className="text-button" disabled={busy || disabled} onClick={() => { setRegistering(!registering); setError(""); }}>{registering ? "J’ai déjà un compte" : "J’ai un code d’invitation"}</button>
       </>}
       {error && <p className="error" role="alert">{error}</p>}
     </div>
