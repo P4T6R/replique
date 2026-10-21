@@ -15,10 +15,48 @@ import sqlite3
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import UUID
 
 from cryptography.fernet import Fernet, InvalidToken
 
 FILES = ("accounts.sqlite3", "oauth-session.enc", "credential.key")
+
+
+def memory_names(root: Path) -> list[str]:
+    folder = root / "account-memory"
+    if not folder.exists():
+        return []
+    if not folder.is_dir() or folder.is_symlink() or folder.stat().st_mode & 0o077:
+        raise ValueError("Account memory directory is unsafe.")
+    names = []
+    for path in folder.iterdir():
+        try:
+            valid = path.suffix == ".sqlite3" and str(UUID(path.stem)) == path.stem
+        except (ValueError, TypeError):
+            valid = False
+        if not valid or not path.is_file() or path.is_symlink() or path.stat().st_mode & 0o077:
+            raise ValueError("Account memory file is unsafe.")
+        names.append("account-memory/" + path.name)
+    return sorted(names)
+
+
+def snapshot_names(manifest: dict) -> list[str]:
+    if not isinstance(manifest, dict) or manifest.get("version") not in {1, 2} or not isinstance(manifest.get("sha256"), dict):
+        raise ValueError("Snapshot manifest is invalid.")
+    names = list(manifest["sha256"])
+    if not set(FILES).issubset(names) or (manifest["version"] == 1 and set(names) != set(FILES)):
+        raise ValueError("Snapshot manifest is invalid.")
+    for name in names:
+        if name in FILES:
+            continue
+        path = Path(name)
+        try:
+            valid = len(path.parts) == 2 and path.parts[0] == "account-memory" and path.suffix == ".sqlite3" and str(UUID(path.stem)) == path.stem
+        except (ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise ValueError("Snapshot manifest contains an unsafe path.")
+    return names
 
 
 def absolute(path: str) -> Path:
@@ -55,11 +93,11 @@ def check_snapshot(directory: Path) -> None:
     if manifest_path.is_symlink() or manifest_path.stat().st_mode & 0o077:
         raise ValueError("Snapshot manifest is unsafe.")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if (not isinstance(manifest, dict) or manifest.get("version") != 1
-            or not isinstance(manifest.get("sha256"), dict)
-            or set(manifest["sha256"]) != set(FILES)):
-        raise ValueError("Snapshot manifest is invalid.")
-    for name in FILES:
+    names = snapshot_names(manifest)
+    expected_memory = sorted(name for name in names if name.startswith("account-memory/"))
+    if memory_names(directory) != expected_memory:
+        raise ValueError("Snapshot account memory list is incomplete.")
+    for name in names:
         path = directory / name
         if not path.is_file() or path.is_symlink() or digest(path) != manifest["sha256"][name]:
             raise ValueError("Snapshot checksum mismatch.")
@@ -69,6 +107,12 @@ def check_snapshot(directory: Path) -> None:
         if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ValueError("Account database is damaged.")
         db.execute("SELECT id FROM accounts LIMIT 1").fetchone()
+    for name in names:
+        if name.startswith("account-memory/"):
+            with sqlite3.connect(directory / name) as db:
+                if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise ValueError("Account memory database is damaged.")
+                db.execute("SELECT id FROM items LIMIT 1").fetchone()
     try:
         raw = Fernet((directory / "credential.key").read_bytes()).decrypt(
             (directory / "oauth-session.enc").read_bytes())
@@ -91,10 +135,19 @@ def create(directory: Path) -> None:
     os.close(descriptor)
     with sqlite3.connect(data / "accounts.sqlite3") as source, sqlite3.connect(database_copy) as target:
         source.backup(target)
+    names = memory_names(data)
+    if names:
+        (directory / "account-memory").mkdir(mode=0o700)
+        for name in names:
+            destination = directory / name
+            descriptor = os.open(destination, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(descriptor)
+            with sqlite3.connect(data / name) as source, sqlite3.connect(destination) as target:
+                source.backup(target)
     private_copy(data / "oauth-session.enc", directory / "oauth-session.enc")
     private_copy(key, directory / "credential.key")
-    manifest = {"version": 1, "created_at": datetime.now(timezone.utc).isoformat(),
-                "sha256": {name: digest(directory / name) for name in FILES}}
+    manifest = {"version": 2, "created_at": datetime.now(timezone.utc).isoformat(),
+                "sha256": {name: digest(directory / name) for name in (*FILES, *names)}}
     target = directory / "manifest.json"
     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as output:
@@ -111,19 +164,33 @@ def restore(directory: Path, data: Path, key: Path) -> None:
         raise ValueError("Create the empty private data and secrets directories first.")
     if data.is_symlink() or key.parent.is_symlink() or data.stat().st_mode & 0o077 or key.parent.stat().st_mode & 0o077:
         raise ValueError("Restore directories must be private (mode 700) and must not be symlinks.")
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    names = snapshot_names(manifest)
+    memory_files = [name for name in names if name.startswith("account-memory/")]
+    folder = data / "account-memory"
+    if folder.exists() or folder.is_symlink():
+        raise ValueError("Restore requires an absent account memory directory.")
     destinations = (data / "accounts.sqlite3", data / "oauth-session.enc", key)
     if any(path.exists() or path.is_symlink() for path in destinations):
         raise ValueError("Restore requires absent account, session and key files; stop the service first.")
     created = []
     try:
+        if memory_files:
+            folder.mkdir(mode=0o700)
         for name, destination in zip(FILES, destinations):
             private_copy(directory / name, destination)
             created.append(destination)
+        for name in memory_files:
+            target = data / name
+            private_copy(directory / name, target)
+            created.append(target)
         if digest(destinations[0]) != digest(directory / FILES[0]):
             raise ValueError("Restored database checksum mismatch.")
     except Exception:
         for path in created:
             path.unlink(missing_ok=True)
+        if memory_files:
+            folder.rmdir()
         raise
 
 
@@ -136,9 +203,13 @@ def drill(directory: Path) -> None:
         secrets.mkdir(mode=0o700)
         key = secrets / "credential.key"
         restore(directory, data, key)
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         for name, target in zip(FILES, (data / FILES[0], data / FILES[1], key)):
             if digest(directory / name) != digest(target):
                 raise ValueError("Restored snapshot does not match its source.")
+        for name in snapshot_names(manifest):
+            if name.startswith("account-memory/") and digest(directory / name) != digest(data / name):
+                raise ValueError("Restored account memory does not match its source.")
 
 
 def main() -> None:

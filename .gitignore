@@ -20,3 +20,4 @@ auth.json
 evidence/*.log
 evidence/*.txt
 evidence/*.html
+evidence/*.png

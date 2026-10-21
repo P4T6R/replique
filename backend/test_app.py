@@ -42,6 +42,13 @@ def image_bytes(text="Bonjour, comment vas-tu ?", size=(1200, 250)):
     return stream.getvalue()
 
 
+def heic_bytes():
+    with Image.open(io.BytesIO(image_bytes())) as image:
+        stream = io.BytesIO()
+        image.save(stream, format="HEIF", quality=90)
+        return stream.getvalue()
+
+
 class CommonSetup:
     def setUp(self):
         self.env = patch.dict(os.environ, {"REPLIQUE_MODE": "demo", "REPLIQUE_DEV_ORIGIN": ""})
@@ -179,6 +186,16 @@ class ApiTests(CommonSetup, unittest.TestCase):
         self.assertEqual(invalid.status_code, 422)
         self.assertEqual(oversized.status_code, 413)
         self.assertEqual(valid.status_code, 503)
+
+    def test_heic_requires_actual_heif_content(self):
+        response = self.client.post("/api/ocr", files={"file": ("capture.heic", image_bytes(), "application/octet-stream")})
+        self.assertEqual(response.status_code, 415)
+
+    @unittest.skipUnless(ocr_languages(), "Local Tesseract unavailable")
+    def test_heic_from_iphone_without_mime_extracts_text(self):
+        response = self.client.post("/api/ocr", files={"file": ("capture.HEIC", heic_bytes(), "application/octet-stream")})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("Bonjour", response.json()["text"])
 
     def test_chatgpt_ocr_requires_image_consent_and_uses_selected_model(self):
         client = TestClient(app, base_url="http://127.0.0.1:8000")

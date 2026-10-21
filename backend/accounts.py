@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 TRIAL_CREDITS = 20
 SESSION_SECONDS = 30 * 24 * 3600
 RESERVATION_SECONDS = 300
-REQUEST_LIMITS = {"generate": 6, "ocr": 10, "ocr_daily": 30}
+REQUEST_LIMITS = {"generate": 6, "ocr": 10, "ocr_daily": 30, "memory_write": 30}
 COOKIE = "replique_account"
 router = APIRouter(prefix="/api/account")
 

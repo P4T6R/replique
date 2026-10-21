@@ -49,11 +49,13 @@ def report(source: Path) -> dict:
     ratings: dict[str, list[int]] = {dimension: [] for dimension in DIMENSIONS}
     failing = set()
     seen = set()
+    votes: dict[str, set[str]] = {case_id: set() for case_id in ids}
     for row in rows:
         pair = row["case_id"], row["reviewer"]
         if pair in seen or row["case_id"] not in ids or row["passes_case"] not in {"yes", "no"}:
             raise ValueError("Review sheet contains duplicate, unknown or incomplete cases")
         seen.add(pair)
+        votes[row["case_id"]].add(row["passes_case"])
         if row["passes_case"] == "no":
             failing.add(row["case_id"])
         for dimension in DIMENSIONS:
@@ -61,9 +63,14 @@ def report(source: Path) -> dict:
             if value not in {"1", "2", "3", "4", "5"}:
                 raise ValueError("Every quality dimension must be rated from 1 to 5")
             ratings[dimension].append(int(value))
+    both_pass = len(ids) - len(failing)
+    agreements = sum(len(case_votes) == 1 for case_votes in votes.values())
     return {"model": next(iter(models)), "cases": len(ids), "reviews": len(rows),
             "mean_scores": {name: round(statistics.mean(values), 2) for name, values in ratings.items()},
-            "cases_failed_by_either_reviewer": sorted(failing)}
+            "cases_failed_by_either_reviewer": sorted(failing),
+            "cases_passed_by_both": both_pass,
+            "pass_rate_percent": round(100 * both_pass / len(ids), 1),
+            "reviewer_agreement_percent": round(100 * agreements / len(ids), 1)}
 
 
 def main() -> None:

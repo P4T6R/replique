@@ -1,12 +1,13 @@
 # Réplique · bêta hébergée avec le forfait ChatGPT du propriétaire
 
-Le domaine `https://replique.duckdns.org` reçoit des comptes Réplique sur invitation.
+Une fois publié, le domaine `https://replique.duckdns.org` reçoit des comptes Réplique sur invitation.
 Chaque compte dispose de 20 générations d’essai. Le navigateur du visiteur ne
 voit ni connexion ChatGPT, ni jeton OAuth, ni identité du propriétaire. Après
 confirmation, le texte est envoyé par le serveur à OpenAI ; cette destination
 est annoncée dans l’interface. Une génération réussie consomme un crédit ; un
-échec rend la réservation. La mémoire de style historique est désactivée sur
-le domaine public tant qu’elle n’est pas isolée par compte.
+échec rend la réservation. La mémoire de style est facultative et séparée par
+compte Réplique ; seuls les exemples enregistrés volontairement peuvent être
+réutilisés après un nouvel accord pour chaque génération.
 
 **Limite réelle :** ce mode n’a pas encore été vérifié avec un compte ChatGPT
 réel. Le forfait, les scopes consentis, le catalogue de modèles et les limites
@@ -93,10 +94,25 @@ génération est refusé, corriger l’autorisation du compte avant d’inviter 
 visiteurs. Un `GET /api/health` sain vérifie le fichier chiffré et sa clé,
 mais ne garantit pas à lui seul qu’OpenAI acceptera une génération.
 
-Installer `deploy/nginx-https.conf`, vérifier `nginx -t`, puis recharger Nginx.
-Le certificat TLS du domaine doit être valide. Réplique écoute uniquement sur
-`127.0.0.1:18081` de l’hôte. Les routes OAuth du propriétaire sont bloquées
+Sur le VPS, vérifier quel fichier Nginx sert actuellement
+`replique.duckdns.org` avec `sudo nginx -T`. Sauvegarder ce fichier, remplacer sa
+configuration active par `deploy/nginx-https.conf`, désactiver l’ancien bloc qui
+sert `deploy/index.html` afin de ne garder qu’un serveur pour ce nom, puis faire
+`sudo nginx -t && sudo systemctl reload nginx`. Ne recharger que si le contrôle
+réussit. Le certificat TLS du domaine doit être valide. Réplique écoute uniquement
+sur `127.0.0.1:18081` de l’hôte. Les routes OAuth du propriétaire sont bloquées
 sur le domaine public ; le secret n’est monté que dans le conteneur backend.
+Depuis une autre machine, vérifier la publication sans envoyer de données privées :
+
+```sh
+python deploy/verify_public.py
+```
+
+Le contrôle doit afficher `OK`. S’il voit encore la page demandant un tunnel SSH,
+le fichier Nginx actif est l’ancien site privé. Si `/api/health` échoue, vérifier
+le conteneur, le modèle fixé et la session propriétaire chiffrée avant d’ouvrir
+les invitations. Le contrôle ne prouve pas qu’OpenAI acceptera les images : faire
+ensuite l’essai avec une capture fictive depuis un compte invité.
 Après une reconnexion du propriétaire en local, transférer la nouvelle session
 chiffrée, puis redémarrer le conteneur. Ne pas réutiliser simultanément
 l’ancienne session locale : les jetons de renouvellement tournent.
@@ -115,6 +131,9 @@ réponse arrive, que le solde passe de 20 à 19, qu’un échec ne coûte rien e
 qu’une requête sans compte est refusée. Mesurer la vitesse et les limites du
 forfait avec deux testeurs. Les comptes sont dans `data/accounts.sqlite3` ;
 sauvegarder ce fichier et la session privée comme des données sensibles.
+Sur téléphone, la page publique peut être ajoutée à l’écran d’accueil depuis
+le menu du navigateur. Ce raccourci ouvre l’interface sans clavier natif ni
+lecture automatique des messageries ; une connexion réseau reste nécessaire.
 
 Pour une capture de conversation, le visiteur accepte séparément l’envoi de
 l’image à OpenAI. Le modèle `REPLIQUE_MODEL` doit prendre en charge les images.
@@ -122,8 +141,10 @@ La lecture remplit le champ texte, sans produire immédiatement de réponse : le
 visiteur relit et attribue les messages, confirme l’envoi du texte, puis clique
 sur « Trouver mes mots ». L’extraction ne retire pas de crédit d’essai, mais
 utilise le forfait ChatGPT du propriétaire et est limitée à 30 images par jour
-et par compte. Un fichier HEIC, une image de plus de 5 Mo ou une photo sans texte
-de conversation lisible doit être remplacé par une capture PNG/JPG/WebP nette.
+et par compte. Les captures PNG/JPG/WebP et les photos HEIC/HEIF de 10 Mo
+maximum sont acceptées. Une photo sans texte de conversation lisible doit être
+remplacée par une capture plus nette ou transcrite manuellement. En cas d’échec,
+le brouillon reste visible et la même image peut être relue après un nouvel accord.
 
 L’abonnement payant n’est pas ouvert : après 20 crédits, Réplique l’indique
 sans accepter de paiement. Avant une offre commerciale mondiale, choisir un
@@ -142,11 +163,12 @@ verrouillent plus le compte d’une victime. Vérifier `nginx -t` avant de recha
 la configuration, puis vérifier une erreur 429 contrôlée en environnement de
 test. Ajuster ces valeurs après avoir mesuré la charge réelle du KVM 2.
 
-Les générations écrivent seulement l’heure, le fournisseur, une catégorie de
+Les générations et lectures de photos écrivent seulement l’heure, le fournisseur, une catégorie de
 résultat et la durée dans `data/operations.sqlite3`. Aucun texte de conversation,
 e-mail, identifiant de compte ou jeton n’y est enregistré. Les événements de
 plus de 30 jours sont supprimés lors du prochain enregistrement. Lire les
-comptages d’échecs, les limites OpenAI et la médiane/p95 des succès :
+comptages d’échecs, les limites OpenAI et la médiane/p95 des succès pour les réponses
+et les photos :
 
 ```sh
 docker compose exec replique python -m backend.operations report --days 7
@@ -158,22 +180,30 @@ de nouveaux testeurs jusqu’au diagnostic.
 
 ## Sauvegarde et restauration vérifiée
 
-Créer un dossier privé et un instantané cohérent de SQLite. Le snapshot contient
-**la base des comptes, la session propriétaire et sa clé** : son accès équivaut
+Arrêter brièvement les écritures pendant la copie, car les bases de mémoire sont
+distinctes de la base des comptes. Créer un dossier privé et un instantané
+cohérent de SQLite. Le snapshot contient
+**la base des comptes, les mémoires par compte, la session propriétaire et sa clé** : son accès équivaut
 à celui du compte propriétaire. Le transférer hors du VPS vers un stockage
 chiffré contrôlé par vous, puis supprimer la copie temporaire du VPS. Ne jamais
 le placer dans Git, dans l’image Docker ou sur un espace public.
 
 ```sh
 cd /opt/replique
-docker compose exec replique sh -c 'umask 077; mkdir -p /data/backups'
-snapshot="snapshot-$(date -u +%Y%m%dT%H%M%SZ)"
-docker compose exec replique python -m backend.backup create "/data/backups/$snapshot"
-docker compose exec replique python -m backend.backup drill "/data/backups/$snapshot"
+(
+  set -e
+  trap 'docker compose up -d --no-build' EXIT
+  docker compose stop replique
+  docker compose run --rm --no-deps --entrypoint sh replique -c 'umask 077; mkdir -p /data/backups'
+  snapshot="snapshot-$(date -u +%Y%m%dT%H%M%SZ)"
+  docker compose run --rm --no-deps replique python -m backend.backup create "/data/backups/$snapshot"
+  docker compose run --rm --no-deps replique python -m backend.backup drill "/data/backups/$snapshot"
+)
 ```
 
-`drill` restaure dans un dossier privé temporaire, compare les trois fichiers
-et l’efface. Faire ce contrôle après chaque sauvegarde, puis transférer le
+`drill` restaure dans un dossier privé temporaire, compare les fichiers de base
+et toutes les mémoires de compte présentes, puis efface le dossier temporaire.
+Faire ce contrôle après chaque sauvegarde, puis transférer le
 snapshot. Par exemple, depuis votre ordinateur privé, copier le dossier
 `/opt/replique/data/backups/snapshot-...` avec `scp -r` vers un disque chiffré
 hors du dépôt, puis ne garder sur le VPS que les copies nécessaires. Conserver
@@ -217,7 +247,7 @@ réponses ni les conversations :
 python -m backend.quality_review template --model SLUG --output /chemin/prive/replique-review.csv
 ```
 
-Chaque testeur lit les trois réponses pour chaque cas et note de 1 à 5 la
+Chaque testeur lit indépendamment les trois réponses pour chaque cas et note de 1 à 5 la
 fidélité aux faits, le naturel, la différence utile des variantes et le respect
 des limites. Il marque `passes_case` avec `yes` ou `no` après lecture des
 critères `must` / `must_not` du corpus. Remplir toutes les lignes puis calculer :
@@ -228,6 +258,8 @@ docker compose exec replique python -m backend.operations report --days 1
 ```
 
 Faire quelques demandes en même temps pour observer la file d’attente et le
-p95, sans épuiser le forfait. Ces notes humaines et mesures réelles restent à
+p95, sans épuiser le forfait. Le rapport indique aussi les cas validés par les
+deux personnes et leur taux d’accord ; examiner toute divergence avant d’élargir
+la bêta. Ces notes humaines et mesures réelles restent à
 produire avec le compte propriétaire ; les tests automatisés utilisent un
 fournisseur simulé.

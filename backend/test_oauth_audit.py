@@ -80,7 +80,7 @@ class AuditCallbackExchange(unittest.TestCase):
   origin='http://127.0.0.1:8000'
   tokens={'access_token':'audit-access','refresh_token':'audit-refresh','id_token':'audit-id',
           'token_type':'Bearer','expires_in':300,'scope':'openid resource.invoke chatgpt.tokens.use.direct'}
-  with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ,{'REPLIQUE_OAUTH_ENABLED':'1','REPLIQUE_DATA_DIR':directory}), patch('backend.oauth.oauth',service), TestClient(app,base_url=origin) as browser:
+  with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ,{'REPLIQUE_OAUTH_ENABLED':'1','REPLIQUE_DATA_DIR':directory}), patch('backend.oauth.oauth',service), patch('backend.oauth.save_persistent_session'), TestClient(app,base_url=origin) as browser:
    response=browser.post('/api/auth/login',headers={'Origin':origin,'X-Replique-Request':'1'})
    self.assertEqual(response.status_code,200)
    self.assertIn('HttpOnly',response.headers['set-cookie'])
@@ -129,7 +129,7 @@ class AuditLogoutRace(unittest.IsolatedAsyncioTestCase):
    finally: service.generations.discard(task)
   scope={'type':'http','method':'POST','path':'/api/auth/logout','scheme':'http','server':('127.0.0.1',8000),'query_string':b'',
          'headers':[(b'host',b'127.0.0.1:8000'),(b'origin',b'http://127.0.0.1:8000'),(b'x-replique-request',b'1'),(b'cookie',b'replique_session=browser')]}
-  with patch.dict(os.environ,{'REPLIQUE_OAUTH_ENABLED':'1'}),patch('backend.oauth.oauth',service):
+  with patch.dict(os.environ,{'REPLIQUE_OAUTH_ENABLED':'1'}),patch('backend.oauth.oauth',service),patch('backend.oauth.save_persistent_session'),patch('backend.oauth.delete_persistent_session'):
    task=asyncio.create_task(generation())
    await started.wait()
    ending=asyncio.create_task(logout(Request(scope)))

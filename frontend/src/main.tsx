@@ -98,6 +98,7 @@ function App() {
     [notice, setNotice] = useState(""),
     [ocrNotice, setOcrNotice] = useState("");
   const [ocrError, setOcrError] = useState("");
+  const [retryablePhoto, setRetryablePhoto] = useState(false);
   const [useMemory, setUseMemory] = useState(false), [memoryPreview, setMemoryPreview] = useState<MemoryPreview | null>(null), [memoryError, setMemoryError] = useState(""), [memoryRevision, setMemoryRevision] = useState(0);
   const memoryChanged = () => { setMemoryRevision(v => v + 1); setConsent(false); setUseMemory(false); setMemoryPreview(null); };
   useEffect(() => {
@@ -106,6 +107,7 @@ function App() {
     return () => { current = false; };
   }, [useMemory, intent, tone, locale, memoryRevision]);
   const file = useRef<HTMLInputElement>(null),
+    pendingPhoto = useRef<File | null>(null),
     generation = useRef(0),
     abort = useRef<AbortController | null>(null),
     results = useRef<HTMLElement>(null);
@@ -213,6 +215,8 @@ function App() {
     return () => abort.current?.abort();
   }, []);
   function updateConversation(value: string) {
+    pendingPhoto.current = null;
+    setRetryablePhoto(false);
     setConversation(value);
     setConfirmed(false);
     setConsent(false);
@@ -238,6 +242,9 @@ function App() {
     setResult(null);
     setError("");
     setOcrNotice("");
+    setOcrError("");
+    setRetryablePhoto(false);
+    pendingPhoto.current = null;
     setNotice(
       isHosted
         ? "Conversation effacée de cet appareil. Les fichiers déjà exportés restent sur votre appareil."
@@ -304,23 +311,24 @@ function App() {
       setOcrError("Autorisez l’envoi de cette capture à OpenAI avant de lancer la lecture.");
       return;
     }
-    if (
-      !["image/png", "image/jpeg", "image/webp"].includes(f.type) ||
-      f.size > 5 * 1024 * 1024
-    ) {
-      setOcrError("Choisissez une image PNG, JPG ou WebP de moins de 5 Mo.");
+    const fileType = (f.type && f.type !== "application/octet-stream") ? f.type :
+      (/\.heic$/i.test(f.name) ? "image/heic" : /\.heif$/i.test(f.name) ? "image/heif" : "");
+    if (!["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"].includes(fileType) || f.size > 10 * 1024 * 1024) {
+      pendingPhoto.current = null;
+      setRetryablePhoto(false);
+      setOcrError("Choisissez une image PNG, JPG, WebP ou HEIC de 10 Mo maximum. Recadrez une photo trop grande.");
       return;
     }
+    pendingPhoto.current = f;
+    setRetryablePhoto(false);
     const id = ++generation.current;
     abort.current?.abort();
     abort.current = new AbortController();
     setBusy("ocr");
     setOcrError("");
     setOcrNotice("");
-    setResult(null);
-    setConfirmed(false);
     const form = new FormData();
-    form.append("file", f);
+    form.append("file", fileType === f.type ? f : new File([f], f.name, { type: fileType }));
     form.append("consent", String(usesCloudOcr && ocrConsent));
     if (health?.mode === "chatgpt") form.append("model", model);
     try {
@@ -346,12 +354,16 @@ function App() {
       if (
         id === generation.current &&
         !(e instanceof DOMException && e.name === "AbortError")
-      )
+      ) {
         setOcrError((e as Error).message);
+        setRetryablePhoto(true);
+      }
     } finally {
-      if (id === generation.current) setBusy("");
-      setOcrConsent(false);
-      if (file.current) file.current.value = "";
+      if (id === generation.current) {
+        setBusy("");
+        setOcrConsent(false);
+        if (file.current) file.current.value = "";
+      }
     }
   }
   async function copy(text: string) {
@@ -470,14 +482,18 @@ function App() {
               <input
                 ref={file}
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif"
                 hidden
                 onChange={(e) => upload(e.target.files?.[0])}
               />
             </div>
-            <p className="upload-info">{usesCloudOcr ? "Capture d’une conversation en PNG, JPG ou WebP · 5 Mo max. Après votre accord, l’image est envoyée à OpenAI ; relisez le texte extrait avant de demander des réponses." : "Capture d’une conversation en PNG, JPG ou WebP · 5 Mo max. Extraction locale, puis suppression du fichier temporaire."}</p>
+            <p className="upload-info">{usesCloudOcr ? "Capture ou photo PNG, JPG, WebP ou HEIC · 10 Mo max. Après votre accord, l’image est envoyée à OpenAI ; relisez le texte extrait avant de demander des réponses." : "Capture ou photo PNG, JPG, WebP ou HEIC · 10 Mo max. Extraction locale, puis suppression du fichier temporaire."}</p>
             {busy === "ocr" && <p className="ocr-note" role="status">Lecture de la capture en cours…</p>}
-            {ocrError && <p className="error" role="alert">{ocrError}</p>}
+            {ocrError && <div className="error" role="alert">{ocrError} Votre texte saisi reste disponible.
+              {retryablePhoto && <><br />{usesCloudOcr && !ocrConsent && <span>Pour réessayer cette même photo, autorisez à nouveau son envoi ci-dessus. </span>}
+                <button type="button" disabled={!!busy || (usesCloudOcr && !ocrConsent)} onClick={() => void upload(pendingPhoto.current || undefined)}>Réessayer la lecture</button>
+              </>}
+            </div>}
             {ocrNotice && <p className="ocr-note" role="status">{ocrNotice}</p>}
             <label className="sr-only" htmlFor="conversation">
               Votre conversation
@@ -598,7 +614,7 @@ function App() {
             </label>
             </div></details>
             </div>
-            {health && !isHosted && <><MemoryPanel revision={memoryRevision} changed={memoryChanged} disabled={!!busy || authBusy} />
+            {health && (!isHosted || account) && <><MemoryPanel key={isHosted ? account?.email : "local"} hosted={isHosted} revision={memoryRevision} changed={memoryChanged} disabled={!!busy || authBusy} />
             <div className="memory-use"><label className="check"><input id="use-memory" type="checkbox" checked={useMemory} disabled={!!busy || authBusy} onChange={e => { setUseMemory(e.target.checked); setConsent(false); }} /><span>Utiliser ma mémoire pour cette génération seulement</span></label><p className="preference-help">Désactivé par défaut. Enregistrer un exemple et l’utiliser sont deux choix séparés.</p>
             {useMemory && <div className="memory-selection" aria-live="polite">{memoryError ? <p className="error" role="alert">{memoryError}</p> : memoryPreview ? <><p>{memoryPreview.examples.length} exemple(s) validé(s) sélectionné(s){memoryPreview.profile ? " et vos préférences enregistrées" : ""}.</p>{memoryPreview.examples.map(item => <details key={item.id}><summary>Voir l’exemple sélectionné</summary><p>{item.reply}</p>{item.conversation && <p>Extrait : {item.conversation}</p>}</details>)}{memoryPreview.profile && <p>Préférences : {memoryPreview.profile.length === "short" ? "phrases courtes" : "longueur équilibrée"}, {memoryPreview.profile.register === "familiar" ? "familier si adapté" : "registre courant"}, {memoryPreview.profile.emoji === "allowed" ? "emoji si adapté" : "sans emoji"}.</p>}<p>{memoryPreview.notice}</p></> : <p>Vérification des exemples à utiliser…</p>}</div>}</div></>}
             {health?.mode === "chatgpt" && <div className="model-field">
@@ -620,7 +636,7 @@ function App() {
                 <span>{health.mode === "local"
                   ? "J’accepte le traitement de ce texte et de mes préférences par le modèle hébergé sur Réplique. Le texte reste sur ce serveur."
                   : health.mode === "hosted"
-                  ? "J’accepte que Réplique envoie ce texte et mes préférences à OpenAI pour générer des réponses. Les règles de traitement d’OpenAI s’appliquent."
+                  ? `J’accepte que Réplique envoie ce texte et mes préférences${useMemory ? ", ainsi que les exemples de mémoire sélectionnés ci-dessus," : ""} à OpenAI pour générer des réponses. Les règles de traitement d’OpenAI s’appliquent.`
                   : <>J’accepte d’envoyer ce texte et mes préférences{useMemory ? ", ainsi que les exemples sauvegardés et les préférences de mémoire sélectionnés ci-dessus," : ""} à {health.provider || "mon fournisseur IA configuré"}. Ses règles de conservation s’appliquent.</>}</span>
               </label>
             ) : (
@@ -673,7 +689,7 @@ function App() {
             )}
             <p className="privacy">
               Aucun envoi à votre place. Échanges temporaires par défaut ;
-              seuls vos enregistrements confirmés alimentent la mémoire locale.
+              seuls vos enregistrements confirmés alimentent votre mémoire {isHosted ? "séparée par compte sur Réplique" : "locale"}.
             </p>
           </form>
           <section
@@ -737,7 +753,7 @@ function App() {
                           })
                         }
                       />
-                      {health && !isHosted && <SaveMemory reply={r.text} conversation={conversation} intent={intent} tone={tone} locale={locale} changed={memoryChanged} />}
+                      {health && (!isHosted || account) && <SaveMemory hosted={isHosted} reply={r.text} conversation={conversation} intent={intent} tone={tone} locale={locale} changed={memoryChanged} />}
                       <p className="why">
                         <span>Ce que ça change</span>
                         {r.why}

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.operations import record_generation, report
+from backend.operations import record_generation, record_ocr, report
 
 
 class OperationsTests(unittest.TestCase):
@@ -16,10 +16,14 @@ class OperationsTests(unittest.TestCase):
             for duration in (100, 200, 1000):
                 self.assertTrue(record_generation("owner_chatgpt", "success", duration))
             self.assertTrue(record_generation("owner_chatgpt", "quota", 50))
+            self.assertTrue(record_ocr("owner_chatgpt", "success", 400))
+            self.assertTrue(record_ocr("owner_chatgpt", "unreadable", 300))
             self.assertFalse(record_generation("owner_chatgpt", "secret-token", 30))
             result = report(1)
             self.assertEqual(result["outcomes"], {"success": 3, "quota": 1})
             self.assertEqual(result["success_latency_ms"], {"median": 200, "p95": 1000, "max": 1000})
+            self.assertEqual(result["ocr"]["outcomes"], {"success": 1, "unreadable": 1})
+            self.assertEqual(result["ocr"]["success_latency_ms"]["median"], 400)
             with sqlite3.connect(Path(directory) / "operations.sqlite3") as db:
                 columns = {row[1] for row in db.execute("PRAGMA table_info(generation_events)")}
             self.assertEqual(columns, {"created_at", "provider", "outcome", "duration_ms"})

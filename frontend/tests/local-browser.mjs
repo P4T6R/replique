@@ -52,6 +52,7 @@ try {
   await page.getByLabel("Code d’invitation").fill("fake-test-invite");
   await page.getByRole("button", { name: "Créer mon compte" }).click();
   await page.getByText("20 crédits").waitFor();
+  await page.locator(".memory-panel").waitFor();
   if (mode === "hosted") {
     assert.equal(await page.getByRole("button", { name: "Importer une capture" }).isDisabled(), true);
     await page.locator(".ocr-consent input").check();
@@ -60,7 +61,7 @@ try {
   await page.locator('input[type="file"]').setInputFiles(capture);
   await page.locator(".context-sheet .error").getByText(/Aucun texte lisible/).waitFor();
   if (mode === "hosted") await page.locator(".ocr-consent input").check();
-  await page.locator('input[type="file"]').setInputFiles(capture);
+  await page.getByRole("button", { name: "Réessayer la lecture" }).click();
   await page.waitForFunction(() => document.querySelector("#conversation")?.value.includes("Bonjour depuis la capture"));
   await page.locator(".ocr-note").getByText(/Relisez-le/).waitFor();
   assert.equal(ocrAttempts, 2);

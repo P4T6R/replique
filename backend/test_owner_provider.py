@@ -20,7 +20,7 @@ from backend.app import app
 from backend.oauth import Session, load_persistent_session, oauth, save_persistent_session
 from backend.operations import report
 from backend.owner_provider import OwnerProviderError, unavailable
-from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER, image_bytes
+from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER, image_bytes, heic_bytes
 
 ORIGIN = "https://replique.duckdns.org"
 HEADERS = {"Origin": ORIGIN, "X-Replique-Request": "1"}
@@ -130,6 +130,15 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(photo.status_code, 200, photo.text)
         self.assertEqual(photo.json()["text"], "Autre personne : Salut")
 
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value="Autre personne : Salut depuis la photo") as vision:
+            heic = self.client.post("/api/ocr", headers=HEADERS,
+                                    files={"file": ("photo.HEIC", heic_bytes(), "application/octet-stream")},
+                                    data={"consent": "true"})
+        self.assertEqual(heic.status_code, 200, heic.text)
+        self.assertTrue(vision.await_args.args[1][1]["image_url"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
+
     def test_hosted_photo_has_daily_limit_and_releases_credit_after_failure(self):
         self.provision()
         self.register()
@@ -144,6 +153,39 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(failure.status_code, 503)
         self.assertEqual(limited.status_code, 429)
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
+
+    def test_hosted_memory_is_private_to_each_account_and_only_sent_with_consent(self):
+        self.provision()
+        self.register()
+        body = {"reply": "Salut, ça me ferait plaisir.", "intent": "répondre naturellement",
+                "rating": "positive", "validated": True, "consent": True, "reviewed": True}
+        saved = self.client.post("/api/memory/items", headers=HEADERS, json=body)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        preview = self.client.get("/api/memory/preview", params={"intent": "répondre naturellement"},
+                                  headers=HEADERS).json()
+        self.assertEqual([item["id"] for item in preview["examples"]], [saved.json()["id"]])
+        with TestClient(app, base_url=ORIGIN) as other:
+            self.assertEqual(other.get("/api/memory", headers=HEADERS).status_code, 401)
+            registered = other.post("/api/account/register", headers=HEADERS, json={
+                "email": "other@example.test", "password": "another long visitor password",
+                "invitation": create_invitation()})
+            self.assertEqual(registered.status_code, 200, registered.text)
+            self.assertEqual(other.get("/api/memory", headers=HEADERS).json()["items"], [])
+            self.assertEqual(other.get("/api/memory/preview", headers=HEADERS,
+                                       params={"intent": "répondre naturellement"}).json()["examples"], [])
+            self.assertEqual(other.get("/api/memory/export", headers=HEADERS).json()["items"], [])
+        payload = {**BASE_REQUEST, "intent": "répondre naturellement", "consent": False,
+                   "use_memory": True, "memory_revision": preview["revision"]}
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps(PROVIDER_ANSWER)) as provider:
+            self.assertEqual(self.client.post("/api/generate", headers=HEADERS, json=payload).status_code, 403)
+            provider.assert_not_called()
+            payload["consent"] = True
+            answer = self.client.post("/api/generate", headers=HEADERS, json=payload)
+        self.assertEqual(answer.status_code, 200, answer.text)
+        self.assertEqual(answer.json()["memory_used"]["item_ids"], [saved.json()["id"]])
+        sent = json.loads(provider.await_args.args[1])
+        self.assertEqual(sent["saved_context"]["examples"][0]["id"], saved.json()["id"])
 
     def test_codex_auth_file_does_not_activate_public_provider(self):
         (Path(self.private.name) / "auth.json").write_text('{"tokens":{"access_token":"fake"}}')

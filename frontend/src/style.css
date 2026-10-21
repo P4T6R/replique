@@ -31,7 +31,7 @@ input[type=checkbox]{color-scheme:only light}
 .trial-account-actions .error{margin-top:12px}
 @media(max-width:767px){.trial-account{grid-template-columns:1fr;gap:16px;padding:20px;margin:12px 0 24px}}
 
-/* Optional local memory keeps the same cream, terracotta and sage tokens. */
+/* Optional memory keeps the same cream, terracotta and sage tokens. */
 .memory-panel{margin:20px 8px 0;border:1px solid var(--line);border-radius:14px;background:var(--paper)}
 .memory-panel>summary{padding:15px;font-size:12px;font-weight:550;list-style:none;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .memory-panel>summary span{font-weight:400;color:var(--muted);font-size:11px}

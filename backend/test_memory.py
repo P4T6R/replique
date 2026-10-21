@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 from backend.app import app, GenerateRequest, generation_data
 from backend import memory
 
@@ -147,8 +148,9 @@ class MemoryTests(unittest.TestCase):
     def test_concurrent_atomic_saves(self):
         from concurrent.futures import ThreadPoolExecutor
         self.save()
+        local_request = Request({'type': 'http', 'headers': []})
         with ThreadPoolExecutor(max_workers=4) as pool:
-            results=list(pool.map(lambda i: memory.save_item(memory.SaveItem(**(self.item|{'reply':'Exemple '+str(i)}))),range(12)))
+            results=list(pool.map(lambda i: memory.save_item(memory.SaveItem(**(self.item|{'reply':'Exemple '+str(i)})),local_request),range(12)))
         self.assertEqual(len({item['id'] for item in results}),12)
         with memory.transaction() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM items').fetchone()[0],13)

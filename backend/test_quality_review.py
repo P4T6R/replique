@@ -31,6 +31,8 @@ class QualityReviewTests(unittest.TestCase):
             self.assertEqual(summary["cases"], len(case_ids()))
             self.assertEqual(summary["mean_scores"]["naturalness"], 4)
             self.assertEqual(summary["cases_failed_by_either_reviewer"], [rows[0]["case_id"]])
+            self.assertEqual(summary["cases_passed_by_both"], len(case_ids()) - 1)
+            self.assertLess(summary["reviewer_agreement_percent"], 100)
             rows[2]["case_id"] = rows[0]["case_id"]
             with path.open("w", encoding="utf-8", newline="") as destination:
                 writer = csv.DictWriter(destination, fieldnames=FIELDS)

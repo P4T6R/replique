@@ -18,7 +18,7 @@ Le parcours OAuth local et Responses est implémenté et vérifié sur des servi
 ## Ce que vous pouvez essayer
 
 - Coller une conversation en attribuant les messages à `Moi :` et `Autre personne :`.
-- Importer une capture PNG/JPEG/WebP, extraire son texte avec Tesseract local ou, en mode ChatGPT et sur le site hébergé, avec OpenAI après un accord distinct, puis corriger le texte et confirmer les auteurs.
+- Importer une capture PNG/JPEG/WebP/HEIC de 10 Mo maximum, extraire son texte avec Tesseract local ou, en mode ChatGPT et sur le site hébergé, avec OpenAI après un accord distinct, puis corriger le texte et confirmer les auteurs. Une erreur conserve le brouillon et permet de réessayer la même image après un nouvel accord.
 - Choisir une intention, un ton, des préférences de style et l’utilisation d’un emoji.
 - Lire trois formulations et une brève explication éditoriale, les modifier, les copier ou les exporter en texte.
 - Effacer la session. L’utilisateur garde la décision et envoie lui-même dans sa messagerie.
@@ -92,6 +92,8 @@ npm test
 
 Scénario navigateur fourni : démarrer le serveur compilé puis `cd frontend && CHROMIUM_PATH=/usr/bin/chromium npm run test:e2e`. Sans `CHROMIUM_PATH`, Playwright attend son navigateur installé. Le scénario produit des captures desktop/mobile dans `evidence/` et vérifie l’absence de débordement à 320, 768, 1024 et 1440 px.
 
+Avec Tesseract installé, `CHROMIUM_PATH=/usr/bin/chromium npm run test:photo` vérifie sur un vrai navigateur mobile que l’échec d’une première lecture conserve le brouillon et qu’un nouvel essai extrait le texte d’une image réelle. Les tests backend couvrent séparément le décodage HEIC/HEIF et l’isolation des mémoires de compte.
+
 État exact des vérifications et blocages : `evidence/QA.md`.
 
 ## Structure
@@ -117,7 +119,7 @@ Le profil de style contient trois préférences explicites bornées (longueur, r
 
 « Utiliser ma mémoire » est désactivé par défaut. Un aperçu montre les exemples sélectionnés et le profil avant la génération ; l’accord d’envoi au fournisseur couvre aussi ces éléments. La sélection est bornée à trois exemples, 6 000 caractères au maximum (4 500 par défaut), de même intention et même variante de français. La révision est vérifiée avant l’appel : si la mémoire a changé, relisez l’aperçu. En cas d’erreur mémoire, la génération avec mémoire est bloquée clairement ; désactivez son utilisation pour continuer. Aucun enregistrement réussi n’est annoncé avant validation de la transaction.
 
-Les données sont locales à cette installation et partagées par toute personne ayant accès à ce serveur local. Ce n’est pas un coffre lié au compte ChatGPT ni une isolation multi-utilisateur : un changement de compte ne change pas le propriétaire du profil local. La connexion OAuth et ses jetons restent séparés, et les jetons ne sont jamais écrits dans SQLite. La base n’est pas chiffrée par l’application ; utilisez la protection du compte et du disque du système d’exploitation.
+En utilisation locale, les données sont partagées par toute personne ayant accès à cette installation : un changement de compte ChatGPT ne change pas le propriétaire du profil local. Sur la bêta hébergée, chaque compte Réplique possède au contraire sa propre base dans `data/account-memory/<id>.sqlite3` ; les routes et la génération sélectionnent exclusivement la mémoire du compte connecté. Les deux modes gardent les jetons OAuth hors de SQLite. Les bases de mémoire ne sont pas chiffrées par l’application ; protégez le disque et les sauvegardes. Le snapshot hébergé inclut toutes les mémoires de compte.
 
 Emplacement de la base :
 - Linux : `$XDG_DATA_HOME/replique/memory.sqlite3`, ou `~/.local/share/replique/memory.sqlite3`.

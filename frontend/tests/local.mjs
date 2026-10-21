@@ -9,6 +9,7 @@ const mode = process.argv[2] === "hosted" ? "hosted" : "local";
 const calls = [];
 let remaining = 20;
 let statusFailure = false;
+let ocrFailure = false;
 window.fetch = async (url, options = {}) => {
   calls.push({ url, options });
   const data = url === "/api/health" ? { mode, provider: mode === "hosted" ? "OpenAI" : "serveur Réplique", ocr_available: true, ocr_languages: ["fra"] }
@@ -22,8 +23,9 @@ window.fetch = async (url, options = {}) => {
     ] } : {};
   if (url === "/api/generate") remaining--;
   if (url === "/api/account/status" && !statusFailure && calls.some(call => call.url === "/api/account/register")) Object.assign(data, { email: "beta@example.test", trial_remaining: remaining, trial_total: 20, subscription_active: false, subscription_available: false });
-  const ok = url !== "/api/account/status" || !!data.email;
-  return { ok, status: ok ? 200 : statusFailure ? 503 : 401, json: async () => data };
+  const ok = (url !== "/api/account/status" || !!data.email) && !(url === "/api/ocr" && ocrFailure);
+  return { ok, status: ok ? 200 : url === "/api/ocr" || statusFailure ? 503 : 401,
+    json: async () => url === "/api/ocr" && ocrFailure ? { detail: "Lecture temporairement indisponible." } : data };
 };
 window.eval(bundle);
 const waitFor = async (predicate) => {
@@ -48,6 +50,7 @@ for (const [input, value] of [[inputs[0], "beta@example.test"], [inputs[1], "str
 }
 document.querySelector(".trial-account form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
 await waitFor(() => document.querySelector(".trial-account strong")?.textContent.includes("20 crédits"));
+assert.ok(document.querySelector(".memory-panel"));
 assert.equal(calls.filter(call => call.url === "/api/auth/status").length, 0);
 assert.equal(calls.filter(call => call.url === "/api/account/register").length, 1);
 if (mode === "hosted") {
@@ -100,5 +103,20 @@ assert.match(document.querySelector(".trial-account + .error").textContent, /con
 statusFailure = false;
 document.querySelector(".trial-account + .error button").click();
 await waitFor(() => !document.querySelector(".trial-account + .error"));
-console.log(`PASS ${mode} beta UI: invitation, renewed consent, preserved draft on balance failure, no visitor ChatGPT login.`);
+if (mode === "hosted") ocrConsent.click();
+ocrFailure = true;
+Object.defineProperty(fileInput, "files", { configurable: true, value: [new window.File(["heic"], "photo.HEIC")] });
+fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+await waitFor(() => document.querySelector(".context-sheet .error")?.textContent.includes("Lecture temporairement indisponible"));
+assert.equal(conversation.value, "Moi : Salut\nAutre personne : Bonjour");
+assert.equal(document.querySelectorAll(".reply").length, 3);
+assert.equal(calls.filter(call => call.url === "/api/ocr").at(-1).options.body.get("file").type, "image/heic");
+const retry = [...document.querySelectorAll(".context-sheet .error button")].find(button => button.textContent.includes("Réessayer"));
+assert.ok(retry);
+if (mode === "hosted") { assert.ok(retry.disabled); ocrConsent.click(); await waitFor(() => !retry.disabled); }
+ocrFailure = false;
+retry.click();
+await waitFor(() => conversation.value.includes("Bonjour depuis la capture"));
+assert.ok(document.querySelector(".compose .primary").disabled);
+console.log(`PASS ${mode} beta UI: invitation, consent, HEIC photo retry, preserved draft, no visitor ChatGPT login.`);
 dom.window.close();

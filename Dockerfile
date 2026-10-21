@@ -1,7 +1,10 @@
+# syntax=docker/dockerfile:1
 FROM node:22.12-alpine AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -s /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
+    npm ci --no-audit --no-fund --strict-ssl=true
 COPY frontend/ ./
 RUN npm run build
 
@@ -12,7 +15,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt \
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -s /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca; fi; \
+    pip install --no-cache-dir -r /app/backend/requirements.txt \
     && groupadd --gid 10001 replique \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /data replique
 COPY --chown=10001:10001 backend/ /app/backend/

@@ -10,27 +10,36 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .accounts import limit_account, public_origin, request_account
 
 def require_local_request(request: Request):
     # An unforgeable-by-HTML custom header complements Host/Origin guards.
     # Cross-origin fetch requires preflight, for which no CORS is enabled.
     if request.headers.get('x-replique-request') != '1':
-        raise HTTPException(403, 'Ouvrez la mémoire depuis l’interface locale de Réplique.')
+        raise HTTPException(403, 'Ouvrez la mémoire depuis l’interface Réplique.')
+
+
+def memory_account(request: Request, write: bool = False) -> str | None:
+    account_id = request_account(request)['id'] if public_origin() else None
+    if account_id and write:
+        limit_account(account_id, 'memory_write')
+    return account_id
 
 
 router = APIRouter(prefix="/api/memory", dependencies=[Depends(require_local_request)])
 NOTICE = "Profil local mono-utilisateur, indépendant du compte ChatGPT connecté. Base non chiffrée. Exemples conservés 30 jours ; préférences jusqu’à suppression."
+HOSTED_NOTICE = "Mémoire facultative séparée par compte Réplique sur ce serveur. Base non chiffrée. Exemples conservés 30 jours ; préférences jusqu’à suppression."
 MAX_ITEMS = 500
 SCHEMA_VERSION = 1
 
 
-def db_path() -> Path:
+def db_path(account_id: str | None = None) -> Path:
     override = os.environ.get("REPLIQUE_DATA_DIR")
     if override:
         root = Path(override).expanduser()
@@ -42,6 +51,15 @@ def db_path() -> Path:
         root = Path.home() / "Library/Application Support/Replique"
     else:
         root = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "replique"
+    if account_id is not None:
+        try:
+            if str(UUID(account_id)) != account_id:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ValueError("Invalid account memory owner") from None
+        if root.is_symlink():
+            raise ValueError("Memory root must not be a symlink")
+        return root / "account-memory" / (account_id + ".sqlite3")
     return root / "memory.sqlite3"
 
 
@@ -49,12 +67,16 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def connect(create=False):
-    path = db_path()
+def connect(create=False, account_id: str | None = None):
+    path = db_path(account_id)
+    if account_id and path.parent.exists() and path.parent.stat().st_mode & 0o077:
+        raise ValueError("Account memory directory must be private")
     if not path.exists() and not create:
         return None
-    if path.is_symlink() or path.parent.is_symlink():
+    if path.is_symlink() or path.parent.is_symlink() or (account_id and path.parent.parent.is_symlink()):
         raise ValueError("Memory path must not be a symlink")
+    if account_id and path.exists() and path.stat().st_mode & 0o077:
+        raise ValueError("Account memory database must be private")
     if create:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -93,10 +115,10 @@ def connect(create=False):
 
 
 @contextmanager
-def transaction(create=False):
+def transaction(create=False, account_id: str | None = None):
     db = None
     try:
-        db = connect(create)
+        db = connect(create, account_id)
         if db is not None:
             db.execute("BEGIN IMMEDIATE" if create else "BEGIN")
         if db is not None:
@@ -167,16 +189,17 @@ class StyleProfile(BaseModel):
 
 
 @router.get('')
-def inspect_memory():
-    with transaction() as db:
-        return {'items': active_items(db), 'profile': read_profile(db), 'revision': revision(db), 'local_only': True, 'encrypted': False, 'notice': NOTICE}
+def inspect_memory(request: Request):
+    account_id = memory_account(request)
+    with transaction(account_id=account_id) as db:
+        return {'items': active_items(db), 'profile': read_profile(db), 'revision': revision(db), 'local_only': account_id is None, 'encrypted': False, 'notice': HOSTED_NOTICE if account_id else NOTICE}
 
 
 @router.post('/items')
-def save_item(body: SaveItem):
+def save_item(body: SaveItem, request: Request):
     if not body.consent or not body.reviewed:
         raise HTTPException(403, 'Relisez le contenu et autorisez explicitement sa conservation locale.')
-    with transaction(True) as db:
+    with transaction(True, memory_account(request, write=True)) as db:
         purge_expired(db)
         if db.execute('SELECT COUNT(*) FROM items').fetchone()[0] >= MAX_ITEMS:
             raise HTTPException(409, 'La mémoire contient 500 exemples. Supprimez-en avant de continuer.')
@@ -190,11 +213,11 @@ def save_item(body: SaveItem):
 
 
 @router.put('/profile')
-def save_profile(body: StyleProfile):
+def save_profile(body: StyleProfile, request: Request):
     if not body.consent:
         raise HTTPException(403, 'Autorisez explicitement la conservation du profil de style.')
     value = body.model_dump(exclude={'consent'}, by_alias=True)
-    with transaction(True) as db:
+    with transaction(True, memory_account(request, write=True)) as db:
         db.execute('INSERT INTO profile VALUES (1,?,?) ON CONFLICT(singleton) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at', (json.dumps(value),now()))
         bump(db)
     return value
@@ -219,8 +242,8 @@ def purge_expired(db):
 
 
 @router.delete('/items/{item_id}')
-def delete_item(item_id: str):
-    with transaction() as db:
+def delete_item(item_id: str, request: Request):
+    with transaction(account_id=memory_account(request, write=True)) as db:
         if db:
             delete_derived(db,item_id)
             db.execute('DELETE FROM items WHERE id=?',(item_id,))
@@ -229,8 +252,8 @@ def delete_item(item_id: str):
 
 
 @router.delete('')
-def delete_memory():
-    with transaction() as db:
+def delete_memory(request: Request):
+    with transaction(account_id=memory_account(request, write=True)) as db:
         if db:
             for row in db.execute('SELECT id FROM items').fetchall():
                 delete_derived(db,row[0])
@@ -244,9 +267,10 @@ def delete_memory():
 
 
 @router.get('/export')
-def export_memory():
-    with transaction() as db:
-        result = {'format':'replique-memory-v1','exported_at':now(),'notice':NOTICE,'items':active_items(db),'profile':read_profile(db),'revision':revision(db)}
+def export_memory(request: Request):
+    account_id = memory_account(request)
+    with transaction(account_id=account_id) as db:
+        result = {'format':'replique-memory-v1','exported_at':now(),'notice':HOSTED_NOTICE if account_id else NOTICE,'items':active_items(db),'profile':read_profile(db),'revision':revision(db)}
         result['evaluation'] = {}
         if db:
             for table in ('eval_versions', 'eval_runs', 'eval_active', 'eval_history'):
@@ -256,8 +280,8 @@ def export_memory():
     return JSONResponse(result, headers={'Content-Disposition':'attachment; filename="replique-memory.json"','Cache-Control':'no-store'})
 
 
-def select_context(intent: str, tone: str, locale: str):
-    with transaction() as db:
+def select_context(intent: str, tone: str, locale: str, account_id: str | None = None):
+    with transaction(account_id=account_id) as db:
         examples = []
         max_examples, max_chars = 3, 4500
         if db and db.execute("SELECT 1 FROM sqlite_master WHERE name='eval_versions'").fetchone():
@@ -276,9 +300,9 @@ def select_context(intent: str, tone: str, locale: str):
                     continue
                 examples.append(example)
                 budget -= size
-        return {'examples':examples,'profile':read_profile(db),'revision':revision(db),'notice':NOTICE}
+        return {'examples':examples,'profile':read_profile(db),'revision':revision(db),'notice':HOSTED_NOTICE if account_id else NOTICE}
 
 
 @router.get('/preview')
-def preview(intent: str='', tone: str='naturel', locale: str='fr_neutre'):
-    return select_context(intent,tone,locale)
+def preview(request: Request, intent: str='', tone: str='naturel', locale: str='fr_neutre'):
+    return select_context(intent,tone,locale,memory_account(request))

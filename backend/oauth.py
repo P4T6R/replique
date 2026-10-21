@@ -371,7 +371,10 @@ class OAuth:
             self.error = {"code": "reauth_required", "message": "Le stockage local protégé est inaccessible. Reconnectez votre compte ChatGPT."}
 
     def status(self, browser):
-        self.restore_session(browser)
+        # A pending login has no stored session to restore yet. An unavailable
+        # keychain must not turn an expired first attempt into "reauth_required".
+        if self.pending is None:
+            self.restore_session(browser)
         owned = self.session if self.session and safe_equal(browser or "", self.session.browser) else None
         pending = self.pending and self.pending.expires > time.time() and safe_equal(browser or "", self.pending.browser)
         return {"enabled": enabled(), "status": "connected" if owned else "connecting" if pending else "reauth_required" if self.error and self.error.get("code") == "reauth_required" and browser else "disconnected",
