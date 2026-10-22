@@ -61,6 +61,8 @@ En mode `REPLIQUE_MODE=chatgpt`, l’image est normalisée localement puis trans
 
 En mode `owner_chatgpt`, le parcours principal conserve la capture dans le navigateur jusqu’au clic sur « Trouver mes mots ». `POST /api/generate-image` reçoit une image et des options, la normalise sans métadonnées, puis demande au modèle fixé par `REPLIQUE_MODEL` d’analyser et de proposer trois réponses en un seul appel. La consigne cible le dernier message reçu, vérifie les messages déjà envoyés ensuite et utilise l’historique pour comprendre la demande récente ; `insight` indique brièvement ce qui a été compris. Un seul accord couvre cette demande. Une réponse réussie utilise un crédit ; une image invalide, une lecture incertaine ou une erreur libère la réservation. L’ancien endpoint `/api/ocr` reste disponible pour compatibilité mais n’est plus utilisé par l’interface hébergée.
 
+Le mode hébergé ajoute une consigne de qualité qui fait répondre au fond et varier les ouvertures dans les échanges légers. Une appréciation positive sur une expérience ordinaire peut être proposée comme brouillon à vérifier ; les disponibilités, engagements, consentements et faits sensibles restent exclus. Le ton affiché « Taquin » transmet la valeur API `léger`. Un refus explicite continue de primer sur toute relance.
+
 Le fichier est limité à 10 Mo à l’entrée et 8 Mo après normalisation, à 16 mégapixels et à 8 000 pixels par côté. Les métadonnées ne sont pas conservées. La requête utilise le jeton OAuth conservé côté serveur et `store:false`, `stream:true`. Le traitement et la conservation sont soumis aux règles OpenAI.
 
 ## OCR réel et local

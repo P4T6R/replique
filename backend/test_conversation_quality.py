@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from backend.app import (app, GenerateRequest, SYSTEM_PROMPT, IMAGE_SYSTEM_PROMPT, DEMO_BRIEF,
+from backend.app import (app, GenerateRequest, SYSTEM_PROMPT, HOSTED_QUALITY_PROMPT, IMAGE_SYSTEM_PROMPT, DEMO_BRIEF,
                          DEMO_UNANSWERED, generation_data, boundary_kind, validate_answer)
 from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER
 
@@ -114,6 +114,9 @@ class ConversationQualityTests(unittest.TestCase):
         self.assertIn('messages de Moi écrits après', IMAGE_SYSTEM_PROMPT)
         self.assertIn('une simple préférence de rédaction', IMAGE_SYSTEM_PROMPT.lower())
         self.assertIn('Dans insight, nomme brièvement le sujet ou la demande', IMAGE_SYSTEM_PROMPT)
+        self.assertIn('un avis demandé appelle un avis', HOSTED_QUALITY_PROMPT)
+        self.assertIn('tone=léger permet une taquinerie douce', HOSTED_QUALITY_PROMPT)
+        self.assertIn(HOSTED_QUALITY_PROMPT, IMAGE_SYSTEM_PROMPT)
 
     def test_variants_differing_only_in_punctuation_are_rejected(self):
         answer = json.loads(json.dumps(PROVIDER_ANSWER))

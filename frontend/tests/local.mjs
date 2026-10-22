@@ -54,6 +54,9 @@ assert.ok(document.querySelector(".memory-panel"));
 assert.equal(calls.filter(call => call.url === "/api/auth/status").length, 0);
 assert.equal(calls.filter(call => call.url === "/api/account/register").length, 1);
 if (mode === "hosted") {
+  const taquin = [...document.querySelectorAll('.tone')].find(label => label.querySelector('input[value="léger"]'));
+  assert.match(taquin?.textContent || "", /Taquin/);
+  taquin.querySelector("input").click();
   assert.doesNotMatch(document.querySelector(".trial-account")?.textContent || "", /OpenAI|ChatGPT/);
   assert.doesNotMatch(document.querySelector(".consent")?.textContent || "", /OpenAI|ChatGPT/);
   assert.doesNotMatch(document.body.textContent, /private-owner@example\.test/);
@@ -75,6 +78,7 @@ if (mode === "hosted") {
   assert.equal(sent.options.body.get("file").name, "capture.png");
   assert.equal(JSON.parse(sent.options.body.get("options")).context_confirmed, true);
   assert.equal(JSON.parse(sent.options.body.get("options")).consent, true);
+  assert.equal(JSON.parse(sent.options.body.get("options")).tone, "léger");
   assert.ok(document.querySelector(".compose .primary").disabled);
   assert.equal(document.querySelector(".selected-photo") !== null, true);
   assert.equal(document.querySelector("a[href='/confidentialite.html']") !== null, true);

@@ -722,7 +722,7 @@ function App() {
                         setConsent(false);
                       }}
                     />
-                    {t}
+                    {t === "léger" ? "Taquin" : t}
                   </label>
                 ))}
               </div>

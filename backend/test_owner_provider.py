@@ -154,6 +154,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertNotIn("OpenAI", response.text)
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
         vision.assert_awaited_once()
+        self.assertIn('QUALITÉ CONVERSATIONNELLE', vision.await_args.args[0])
         content = vision.await_args.args[1]
         self.assertEqual(len(content), 2)
         self.assertEqual(content[1]["type"], "input_image")
@@ -201,6 +202,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         sent = json.loads(provider.await_args.args[1])
         self.assertEqual(sent["messages"], [{"speaker": "other", "text": "Tu viens samedi ?"}])
+        self.assertIn('QUALITÉ CONVERSATIONNELLE', provider.await_args.args[0])
     def test_hosted_photo_has_daily_limit_and_releases_credit_after_failure(self):
         self.provision()
         self.register()
