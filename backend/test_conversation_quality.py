@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from backend.app import (app, GenerateRequest, SYSTEM_PROMPT, DEMO_BRIEF,
+from backend.app import (app, GenerateRequest, SYSTEM_PROMPT, IMAGE_SYSTEM_PROMPT, DEMO_BRIEF,
                          DEMO_UNANSWERED, generation_data, boundary_kind, validate_answer)
 from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER
 
@@ -29,7 +29,18 @@ class ConversationQualityTests(unittest.TestCase):
         self.assertEqual(len(data['messages']), 4)
         self.assertEqual(data['messages'][1]['text'], 'Pas vendredi.\nSamedi plutôt ?')
         self.assertEqual(data['last_message'], {'speaker': 'other', 'text': 'ok'})
+        self.assertEqual(data['last_received_message'], {'speaker': 'other', 'text': 'ok'})
         self.assertEqual(data['trailing_self_messages'], 0)
+
+    def test_last_received_message_is_preserved_when_user_has_written_after_it(self):
+        conversation = ('Autre personne : Tu peux me rappeler ce soir ?\n'
+                        'Moi : Oui, je t’appelle après le travail.\n'
+                        'Moi : Je finis vers 19 h.')
+        data = json.loads(generation_data(self.request(conversation=conversation)))
+        self.assertEqual(data['last_received_message'],
+                         {'speaker': 'other', 'text': 'Tu peux me rappeler ce soir ?'})
+        self.assertEqual(data['last_message']['speaker'], 'self')
+        self.assertEqual(data['trailing_self_messages'], 2)
 
     def test_unanswered_messages_remain_observations_not_diagnoses(self):
         data = json.loads(generation_data(self.request(conversation=DEMO_UNANSWERED)))
@@ -96,6 +107,13 @@ class ConversationQualityTests(unittest.TestCase):
         self.assertIn('un oubli est possible', SYSTEM_PROMPT)
         self.assertIn('une abstention expliquée', SYSTEM_PROMPT)
         self.assertIn('sans refus explicite ni autre risque identifié', SYSTEM_PROMPT)
+
+    def test_image_prompt_targets_latest_received_message_and_accounts_for_sent_replies(self):
+        self.assertIn('dernier message reçu de l’autre personne', SYSTEM_PROMPT)
+        self.assertIn("repère le dernier message reçu de l'autre personne", IMAGE_SYSTEM_PROMPT)
+        self.assertIn('messages de Moi écrits après', IMAGE_SYSTEM_PROMPT)
+        self.assertIn('une simple préférence de rédaction', IMAGE_SYSTEM_PROMPT.lower())
+        self.assertIn('Dans insight, nomme brièvement le sujet ou la demande', IMAGE_SYSTEM_PROMPT)
 
     def test_variants_differing_only_in_punctuation_are_rejected(self):
         answer = json.loads(json.dumps(PROVIDER_ANSWER))
