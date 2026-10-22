@@ -97,7 +97,10 @@ async def _stream_text(browser, model, instructions, user_data):
                         provider_error("unsupported_plan", 403)
                     if response.status_code == 429:
                         provider_error("subscription_sharing_usage_limit_exceeded", 429)
-                    if response.status_code >= 300 or "text/event-stream" not in response.headers.get("content-type", ""):
+                    # Some valid OpenAI SSE responses omit Content-Type. The
+                    # event parser below still requires a completed response.
+                    content_type = response.headers.get("content-type", "")
+                    if response.status_code >= 300 or (content_type and "text/event-stream" not in content_type):
                         provider_error("provider_error")
                     size, text, fields, completed = 0, [], [], False
                     async for line in bounded_lines(response):

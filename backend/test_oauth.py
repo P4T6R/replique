@@ -251,11 +251,13 @@ class CryptoAndTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [{"slug": "test-model", "display_name": "Test model"}])
         request.assert_awaited_once_with("GET", RESOURCE + "/models", max_bytes=MAX_MODEL_CATALOG,
                                          headers={"Authorization": "Bearer mock-token"})
-    async def stream(self, events):
+    async def stream(self, events, content_type="text/event-stream"):
         requests=[]
         def handler(request):
             requests.append(request)
-            return httpx.Response(200,headers={"Content-Type":"text/event-stream"},text="".join("data: "+json.dumps(event)+"\n\n" for event in events))
+            headers={"Content-Type":content_type} if content_type else {}
+            body="".join("data: "+json.dumps(event)+"\n\n" for event in events).encode()
+            return httpx.Response(200,headers=headers,content=body)
         with patch("backend.chatgpt_provider.catalog",new_callable=AsyncMock,return_value=[{"slug":"test","display_name":"Test"}]), patch.object(oauth,"access",new_callable=AsyncMock,return_value="mock-secret"), patch("backend.chatgpt_provider.client",side_effect=lambda:httpx.AsyncClient(transport=httpx.MockTransport(handler))):
             result=await stream_text("browser","test","instructions","user")
         return result,requests
@@ -269,6 +271,13 @@ class CryptoAndTransport(unittest.IsolatedAsyncioTestCase):
         self.assertIs(payload["store"],False)
         self.assertIs(payload["stream"],True)
         self.assertFalse({"temperature","max_output_tokens","previous_response_id","messages"} & payload.keys())
+    async def test_valid_stream_without_content_type(self):
+        text,_=await self.stream([{"type":"response.output_text.delta","delta":"ok"},
+                                  {"type":"response.completed","response":{"status":"completed"}}], content_type="")
+        self.assertEqual(text,"ok")
+    async def test_incomplete_stream_without_content_type_is_rejected(self):
+        with self.assertRaises(HTTPException):
+            await self.stream([{"type":"response.output_text.delta","delta":"partial"}], content_type="")
     async def test_partial_failed_and_incomplete_never_success(self):
         for terminal in (None,{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}},{"type":"response.incomplete"},{"type":"response.completed","response":{"status":"incomplete"}}):
             events=[{"type":"response.output_text.delta","delta":"partial"}]
