@@ -106,6 +106,8 @@ function App() {
     [notice, setNotice] = useState(""),
     [ocrNotice, setOcrNotice] = useState("");
   const [ocrError, setOcrError] = useState("");
+  const [selectedPhoto, setSelectedPhoto] = useState<File | null>(null);
+  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState("");
   const [retryablePhoto, setRetryablePhoto] = useState(false);
   const [extractedPhoto, setExtractedPhoto] = useState<ExtractedPhoto | null>(null);
   const [resultStale, setResultStale] = useState(false);
@@ -126,7 +128,14 @@ function App() {
     abort = useRef<AbortController | null>(null),
     results = useRef<HTMLElement>(null);
   const isHosted = health?.mode === "local" || health?.mode === "hosted";
-  const usesCloudOcr = health?.mode === "chatgpt" || health?.mode === "hosted";
+  const directPhoto = health?.mode === "hosted";
+  const usesCloudOcr = health?.mode === "chatgpt";
+  useEffect(() => {
+    if (!selectedPhoto || !URL.createObjectURL) { setSelectedPhotoUrl(""); return; }
+    const url = URL.createObjectURL(selectedPhoto);
+    setSelectedPhotoUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [selectedPhoto]);
   const connect = () => {
     setConnection("");
     request<Health>("/api/health")
@@ -245,6 +254,22 @@ function App() {
     setOcrError("");
     setOcrNotice("");
   }
+  function chooseHostedPhoto(f: File | undefined) {
+    if (!f) return;
+    const fileType = (f.type && f.type !== "application/octet-stream") ? f.type :
+      (/\.heic$/i.test(f.name) ? "image/heic" : /\.heif$/i.test(f.name) ? "image/heif" : "");
+    if (!["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"].includes(fileType) || f.size > 10 * 1024 * 1024) {
+      setOcrError("Choisissez une image PNG, JPG, WebP ou HEIC de 10 Mo maximum.");
+      return;
+    }
+    setSelectedPhoto(f.type === fileType ? f : new File([f], f.name, { type: fileType }));
+    setOcrError("");
+    setConsent(false);
+    setResult(null);
+    setResultContext(null);
+    setResultStale(false);
+    if (file.current) file.current.value = "";
+  }
   function attributeLine(speaker: "Moi" | "Autre personne") {
     const input = conversationInput.current;
     if (!input || !conversation.trim()) return;
@@ -288,6 +313,7 @@ function App() {
     setError("");
     setOcrNotice("");
     setOcrError("");
+    setSelectedPhoto(null);
     setRetryablePhoto(false);
     setExtractedPhoto(null);
     pendingPhoto.current = null;
@@ -309,23 +335,29 @@ function App() {
     setError("");
     setNotice("");
     try {
-      const data = await request<Result>("/api/generate", {
+      const payload = {
+        conversation,
+        intent,
+        tone,
+        style,
+        emoji,
+        locale,
+        familiarity,
+        use_memory: useMemory,
+        ...(useMemory && memoryPreview ? { memory_revision: memoryPreview.revision } : {}),
+        consent,
+        context_confirmed: directPhoto ? consent : confirmed,
+        ...(health.mode === "chatgpt" ? { model } : {}),
+      };
+      const form = new FormData();
+      if (directPhoto && selectedPhoto) {
+        form.append("file", selectedPhoto);
+        form.append("options", JSON.stringify(payload));
+      }
+      const data = await request<Result>(directPhoto && selectedPhoto ? "/api/generate-image" : "/api/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({
-          conversation,
-          intent,
-          tone,
-          style,
-          emoji,
-          locale,
-          familiarity,
-          use_memory: useMemory,
-          ...(useMemory && memoryPreview ? { memory_revision: memoryPreview.revision } : {}),
-          consent,
-          context_confirmed: confirmed,
-          ...(health.mode === "chatgpt" ? { model } : {}),
-        }),
+        headers: directPhoto && selectedPhoto ? authHeaders : { "Content-Type": "application/json", ...authHeaders },
+        body: directPhoto && selectedPhoto ? form : JSON.stringify(payload),
         signal: abort.current.signal,
       });
       if (id === generation.current) {
@@ -465,6 +497,13 @@ function App() {
     if (isHosted && !account) return "Connectez-vous ou créez un compte pour continuer.";
     if (isHosted && account && !account.subscription_active && account.trial_remaining === 0) return "Vos crédits d’essai sont épuisés.";
     if (health.mode === "chatgpt" && (!auth?.sharing || auth.status !== "connected" || !model)) return "Connectez ChatGPT et choisissez un modèle.";
+    if (directPhoto) {
+      if (!selectedPhoto && conversation.trim().length < 5) return "Ajoutez une capture ou collez le dernier message reçu.";
+      if (useMemory && memoryError) return "La mémoire est indisponible. Désactivez son utilisation ou réessayez.";
+      if (useMemory && !memoryPreview) return "Vérification de votre mémoire en cours.";
+      if (!consent) return "Confirmez l’analyse de votre capture ou de votre texte pour continuer.";
+      return null;
+    }
     if (conversation.trim().length < 5) return "Ajoutez le message auquel vous voulez répondre.";
     if (health.mode === "demo" && ![sample, brief, unanswered, refusal].includes(conversation)) return "La démo accepte uniquement les exemples fictifs proposés.";
     if (!/^\s*(?:Moi|Autre personne)\s*:/i.test(conversation)) return "Commencez par un message attribué : retirez les en-têtes, puis cliquez dans la première phrase et choisissez son auteur ci-dessus.";
@@ -477,11 +516,12 @@ function App() {
   })();
   const canGenerate = generationBlock === null;
   const generationHint = generationBlock || "Prêt à générer trois propositions. Une génération peut utiliser un crédit d’essai.";
-  const photoHint = health && !health.ocr_available ? "La lecture des photos est indisponible sur ce serveur. Vous pouvez coller le texte à la place."
+  const photoHint = directPhoto ? (!account ? "Connectez-vous pour ajouter une capture." : account && !account.subscription_active && account.trial_remaining === 0 ? "Vos crédits d’essai sont épuisés." : "")
+    : health && !health.ocr_available ? "La lecture des photos est indisponible sur ce serveur. Vous pouvez coller le texte à la place."
     : isHosted && !account ? "Connectez-vous pour importer une photo."
       : isHosted && account && !account.subscription_active && account.trial_remaining === 0 ? "Vos crédits d’essai sont épuisés ; l’import de photos est suspendu."
         : health?.mode === "chatgpt" && (auth?.status !== "connected" || !auth.sharing || !model) ? "Connectez ChatGPT et choisissez un modèle pour importer une photo."
-      : usesCloudOcr && !ocrConsent ? "Cochez l’autorisation ci-dessus pour activer l’import de la photo."
+        : usesCloudOcr && !ocrConsent ? "Cochez l’autorisation ci-dessus pour activer l’import de la photo."
         : "";
   return (
     <div className="app">
@@ -489,7 +529,7 @@ function App() {
       <header className="topbar">
         <a className="brand" href="#atelier" aria-label="Réplique, accueil"><span className="brand-mark" aria-hidden="true">r</span>réplique<span className="brand-period">.</span></a>
         <span className="brand-caption">L’ATELIER DES CONVERSATIONS</span>
-        <button className="quiet" onClick={() => conversation.trim() || result || style.trim() ? setResetPrompt(true) : reset()} disabled={authBusy} aria-label="Effacer la session et commencer une nouvelle conversation">Nouvelle conversation <span aria-hidden="true">＋</span></button>
+        <button className="quiet" onClick={() => conversation.trim() || selectedPhoto || result || style.trim() ? setResetPrompt(true) : reset()} disabled={authBusy} aria-label="Effacer la session et commencer une nouvelle conversation">Nouvelle conversation <span aria-hidden="true">＋</span></button>
       </header>
       {resetPrompt && <div className="reset-confirm" role="group" aria-label="Confirmer une nouvelle conversation"><p>Effacer le brouillon et les réponses de cette session ?</p><div><button type="button" className="text-button" onClick={reset}>Effacer et recommencer</button><button type="button" className="text-button" onClick={() => setResetPrompt(false)}>Garder ma conversation</button></div></div>}
       <main id="atelier">
@@ -497,13 +537,13 @@ function App() {
           <div><p className="eyebrow">UN MESSAGE PEUT TOUT CHANGER. RESTEZ VOUS-MÊME.</p><h1>Ça se dit.<br /><em>À votre façon.</em><span className="heading-star" aria-hidden="true">✳</span></h1></div>
           <div className="intro-aside"><p>Vous avez le fond.<br />Trouvons les mots.</p><span>Un peu de recul, trois pistes.<br />Et toujours le dernier mot pour vous.</span></div>
         </section>
-        <div className="atelier-bar"><span className="eyebrow">VOTRE ESPACE POUR RÉPONDRE</span><span className={"mode " + (health && health.mode !== "demo" ? "live" : "")}><span className="dot" aria-hidden="true" />{health?.mode === "hosted" ? "IA · service Réplique" : health?.mode === "local" ? "IA · modèle sur Réplique" : health?.mode === "chatgpt" ? "IA · forfait ChatGPT" : health?.mode === "live" ? "IA · fournisseur configuré" : health ? "Démo · exemples préécrits" : "Vérification du service…"}</span></div>
+        <div className="atelier-bar"><span className="eyebrow">VOTRE ESPACE POUR RÉPONDRE</span>{!directPhoto && <span className={"mode " + (health && health.mode !== "demo" ? "live" : "")}><span className="dot" aria-hidden="true" />{health?.mode === "local" ? "IA · modèle sur Réplique" : health?.mode === "chatgpt" ? "IA · forfait ChatGPT" : health?.mode === "live" ? "IA · fournisseur configuré" : health ? "Démo · exemples préécrits" : "Vérification du service…"}</span>}</div>
         {connection && (
           <div className="error" role="alert">
             {connection} <button onClick={connect}>Réessayer</button>
           </div>
         )}
-        {isHosted ? <><AccountPanel account={account} provider={health?.mode === "hosted" ? "openai" : "local"} disabled={!!busy} onChange={next => { reset(); setAccount(next); setAccountError(""); }} />{accountError && <p className="error" role="alert">{accountError} <button type="button" onClick={() => void refreshAccount()}>Réessayer</button></p>}</> : health && <details className="account-disclosure" open={!!authError || auth?.status === "reauth_required"}><summary><span className="account-summary-icon" aria-hidden="true">◎</span><span>{auth?.status === "connected" ? "Votre compte ChatGPT est connecté" : "Envie d’utiliser vos propres conversations ?"}<small>{auth?.status === "connected" ? "Compte, modèles et utilisation" : "Connexion ChatGPT et état du service"}</small></span><span className="disclosure-plus" aria-hidden="true">＋</span></summary>
+        {isHosted ? <><AccountPanel account={account} disabled={!!busy} onChange={next => { reset(); setAccount(next); setAccountError(""); }} />{accountError && <p className="error" role="alert">{accountError} <button type="button" onClick={() => void refreshAccount()}>Réessayer</button></p>}</> : health && <details className="account-disclosure" open={!!authError || auth?.status === "reauth_required"}><summary><span className="account-summary-icon" aria-hidden="true">◎</span><span>{auth?.status === "connected" ? "Votre compte ChatGPT est connecté" : "Envie d’utiliser vos propres conversations ?"}<small>{auth?.status === "connected" ? "Compte, modèles et utilisation" : "Connexion ChatGPT et état du service"}</small></span><span className="disclosure-plus" aria-hidden="true">＋</span></summary>
         <section className="account-panel" aria-labelledby="account-title" aria-busy={authBusy}>
           <div>
             <div className="eyebrow">VOTRE COMPTE</div>
@@ -551,7 +591,7 @@ function App() {
               <button
                 type="button"
                 className="text-button"
-                disabled={!!busy || (isHosted && (!account || (!account.subscription_active && account.trial_remaining === 0))) || (health?.mode === "chatgpt" && (auth?.status !== "connected" || !auth.sharing || !model)) || (usesCloudOcr && !ocrConsent) || !health?.ocr_available}
+                disabled={!!busy || (isHosted && (!account || (!account.subscription_active && account.trial_remaining === 0))) || (health?.mode === "chatgpt" && (auth?.status !== "connected" || !auth.sharing || !model)) || (usesCloudOcr && !ocrConsent) || (!directPhoto && !health?.ocr_available)}
                 onClick={() => file.current?.click()}
               >
                 Importer une capture
@@ -561,6 +601,7 @@ function App() {
                 className="text-button"
                 disabled={!!busy}
                 onClick={() => {
+                  setSelectedPhoto(null);
                   updateConversation(sample);
                   setOcrNotice("Exemple entièrement fictif.");
                 }}
@@ -572,18 +613,22 @@ function App() {
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif"
                 hidden
-                onChange={(e) => upload(e.target.files?.[0])}
+                onChange={(e) => directPhoto ? chooseHostedPhoto(e.target.files?.[0]) : void upload(e.target.files?.[0])}
               />
             </div>
-            <p className="upload-info">{usesCloudOcr ? "Capture ou photo PNG, JPG, WebP ou HEIC · 10 Mo max. Après votre accord, l’image est envoyée à OpenAI ; relisez le texte extrait avant de demander des réponses." : "Capture ou photo PNG, JPG, WebP ou HEIC · 10 Mo max. Extraction locale, puis suppression du fichier temporaire."}</p>
+            <p className="upload-info">{directPhoto ? "Capture PNG, JPG, WebP ou HEIC · 10 Mo max. Elle sera analysée quand vous cliquerez sur « Trouver mes mots »." : usesCloudOcr ? "Capture ou photo PNG, JPG, WebP ou HEIC · 10 Mo max. Après votre accord, l’image est envoyée à OpenAI ; relisez le texte extrait avant de demander des réponses." : "Capture ou photo PNG, JPG, WebP ou HEIC · 10 Mo max. Extraction locale, puis suppression du fichier temporaire."}</p>
             {photoHint && <p className="upload-hint" role="status">{photoHint}</p>}
             {busy === "ocr" && <p className="ocr-note" role="status">Lecture de la capture en cours…</p>}
-            {ocrError && <div className="error" role="alert">{ocrError} Votre texte saisi reste disponible.
+            {ocrError && <div className="error" role="alert">{ocrError} {!directPhoto && "Votre texte saisi reste disponible."}
               {retryablePhoto && <><br />{usesCloudOcr && !ocrConsent && <span>Pour réessayer cette même photo, autorisez à nouveau son envoi ci-dessus. </span>}
                 <button type="button" disabled={!!busy || (usesCloudOcr && !ocrConsent)} onClick={() => void upload(pendingPhoto.current || undefined)}>Réessayer la lecture</button>
               </>}
             </div>}
             {ocrNotice && <p className="ocr-note" role="status">{ocrNotice}</p>}
+            {directPhoto && selectedPhoto && <div className="selected-photo" role="status">
+              {selectedPhotoUrl && <img src={selectedPhotoUrl} alt="Capture sélectionnée pour l’analyse" />}
+              <div><strong>Capture ajoutée</strong><span>{selectedPhoto.name}</span><button type="button" className="text-button" disabled={!!busy} onClick={() => { setSelectedPhoto(null); setConsent(false); setResult(null); }}>Retirer la capture</button></div>
+            </div>}
             {extractedPhoto && <div id="photo-preview" className="photo-preview" tabIndex={-1} aria-label="Texte extrait de la photo">
               <strong>Texte lu sur la photo</strong>
               <p>Votre brouillon actuel est conservé. Vérifiez le texte ci-dessous avant de choisir.</p>
@@ -595,24 +640,20 @@ function App() {
               </div>
               {conversation.trimEnd().length + 2 + extractedPhoto.text.length > 12000 && <p>Le texte réuni dépasserait 12 000 caractères. Raccourcissez le brouillon ou remplacez-le.</p>}
             </div>}
-            <label className="sr-only" htmlFor="conversation">
-              Votre conversation
-            </label>
+            <label className="sr-only" htmlFor="conversation">{directPhoto ? "Dernier message reçu ou précision facultative" : "Votre conversation"}</label>
             <textarea
               id="conversation"
               ref={conversationInput}
               disabled={!!busy}
               className="conversation"
               maxLength={12000}
-              required
+              required={!directPhoto || !selectedPhoto}
               value={conversation}
               onChange={(e) => updateConversation(e.target.value)}
-              placeholder={
-                "Collez votre échange ici…\n\nMoi : Ça m’a fait plaisir de te voir.\nAutre personne : Moi aussi. On remet ça ?"
-              }
+              placeholder={directPhoto ? "Sinon, collez le dernier message reçu ici. Avec une capture, vous pouvez ajouter une précision facultative." : "Collez votre échange ici…\n\nMoi : Ça m’a fait plaisir de te voir.\nAutre personne : Moi aussi. On remet ça ?"}
               aria-describedby="context-help"
             />
-            {!!conversation.trim() && <div className="speaker-tools" role="group" aria-label="Attribuer le message sélectionné">
+            {!directPhoto && !!conversation.trim() && <div className="speaker-tools" role="group" aria-label="Attribuer le message sélectionné">
               <span>Qui a écrit la ligne où se trouve le curseur ?</span>
               <div>
                 <button type="button" disabled={!!busy} onClick={() => attributeLine("Moi")}>Moi</button>
@@ -622,13 +663,13 @@ function App() {
             </div>}
             <div className="input-caption">
               <span id="context-help">
-                Retirez les noms et détails sensibles. Indiquez qui parle.
+                {directPhoto ? "Vous pouvez retirer les détails sensibles avant de coller un texte." : "Retirez les noms et détails sensibles. Indiquez qui parle."}
               </span>
               <span>
                 {conversation.length.toLocaleString("fr-FR")} / 12 000
               </span>
             </div>
-            <label className="check">
+            {!directPhoto && <label className="check">
               <input
                 type="checkbox"
                 checked={confirmed}
@@ -638,7 +679,7 @@ function App() {
               <span>
                 J’ai relu le texte et vérifié qui a écrit chaque message.
               </span>
-            </label>
+            </label>}
             </div></div>
             <div className="intention-sheet">
             <div className="section-heading second">
@@ -724,8 +765,9 @@ function App() {
             </div></details>
             </div>
             {health && (!isHosted || account) && <><MemoryPanel key={isHosted ? account?.email : "local"} hosted={isHosted} revision={memoryRevision} changed={memoryChanged} disabled={!!busy || authBusy} />
+            <details className="advanced-memory" open={!directPhoto}>{directPhoto && <summary>Utiliser ma mémoire de style (facultatif)</summary>}
             <div className="memory-use"><label className="check"><input id="use-memory" type="checkbox" checked={useMemory} disabled={!!busy || authBusy} onChange={e => { setUseMemory(e.target.checked); setConsent(false); setResultStale(true); }} /><span>Utiliser ma mémoire pour cette génération seulement</span></label><p className="preference-help">Désactivé par défaut. Enregistrer un exemple et l’utiliser sont deux choix séparés.</p>
-            {useMemory && <div className="memory-selection" aria-live="polite">{memoryError ? <p className="error" role="alert">{memoryError}</p> : memoryPreview ? <><p>{memoryPreview.examples.length} exemple(s) validé(s) sélectionné(s){memoryPreview.profile ? " et vos préférences enregistrées" : ""}.</p>{memoryPreview.examples.map(item => <details key={item.id}><summary>Voir l’exemple sélectionné</summary><p>{item.reply}</p>{item.conversation && <p>Extrait : {item.conversation}</p>}</details>)}{memoryPreview.profile && <p>Préférences : {memoryPreview.profile.length === "short" ? "phrases courtes" : "longueur équilibrée"}, {memoryPreview.profile.register === "familiar" ? "familier si adapté" : "registre courant"}, {memoryPreview.profile.emoji === "allowed" ? "emoji si adapté" : "sans emoji"}.</p>}<p>{memoryPreview.notice}</p></> : <p>Vérification des exemples à utiliser…</p>}</div>}</div></>}
+            {useMemory && <div className="memory-selection" aria-live="polite">{memoryError ? <p className="error" role="alert">{memoryError}</p> : memoryPreview ? <><p>{memoryPreview.examples.length} exemple(s) validé(s) sélectionné(s){memoryPreview.profile ? " et vos préférences enregistrées" : ""}.</p>{memoryPreview.examples.map(item => <details key={item.id}><summary>Voir l’exemple sélectionné</summary><p>{item.reply}</p>{item.conversation && <p>Extrait : {item.conversation}</p>}</details>)}{memoryPreview.profile && <p>Préférences : {memoryPreview.profile.length === "short" ? "phrases courtes" : "longueur équilibrée"}, {memoryPreview.profile.register === "familiar" ? "familier si adapté" : "registre courant"}, {memoryPreview.profile.emoji === "allowed" ? "emoji si adapté" : "sans emoji"}.</p>}<p>{memoryPreview.notice}</p></> : <p>Vérification des exemples à utiliser…</p>}</div>}</div></details></>}
             {health?.mode === "chatgpt" && <div className="model-field">
               <label className="field-label" htmlFor="model">Modèle · forfait ChatGPT</label>
               <select id="model" value={model} disabled={!!busy || authBusy || !models.length} onChange={(e) => { setModel(e.target.value); setResultStale(true); setConsent(false); setOcrConsent(false); setUseMemory(false); setMemoryPreview(null); }}>
@@ -742,10 +784,10 @@ function App() {
                   checked={consent}
                   onChange={(e) => setConsent(e.target.checked)}
                 />
-                <span>{health.mode === "local"
+                <span>{directPhoto
+                  ? <>J’ai vérifié la capture ou le texte choisi et j’autorise son envoi avec mes préférences pour obtenir des réponses. <a href="/confidentialite.html" target="_blank" rel="noopener noreferrer">Comment mes données sont traitées</a>.</>
+                  : health.mode === "local"
                   ? "J’accepte le traitement de ce texte et de mes préférences par le modèle hébergé sur Réplique. Le texte reste sur ce serveur."
-                  : health.mode === "hosted"
-                  ? `J’accepte que Réplique envoie ce texte et mes préférences${useMemory ? ", ainsi que les exemples de mémoire sélectionnés ci-dessus," : ""} à OpenAI pour générer des réponses. Les règles de traitement d’OpenAI s’appliquent.`
                   : <>J’accepte d’envoyer ce texte et mes préférences{useMemory ? ", ainsi que les exemples sauvegardés et les préférences de mémoire sélectionnés ci-dessus," : ""} à {health.provider || "mon fournisseur IA configuré"}. Ses règles de conservation s’appliquent.</>}</span>
               </label>
             ) : (
@@ -889,7 +931,7 @@ function App() {
             réplique{" "}
             <span className="footer-tag">Vos mots, avec un peu de recul.</span>
           </span>
-          <span>Une aide pour écrire. Jamais un envoi automatique.</span>
+          <span>Une aide pour écrire. Jamais un envoi automatique.{directPhoto && <> <a href="/confidentialite.html">Confidentialité</a></>}</span>
         </footer>
       </main>
     </div>

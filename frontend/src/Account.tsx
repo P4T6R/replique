@@ -11,7 +11,6 @@ export type AccountStatus = {
 type Props = {
   account: AccountStatus | null;
   onChange: (account: AccountStatus | null) => void;
-  provider: "local" | "openai";
   disabled?: boolean;
 };
 
@@ -35,7 +34,7 @@ async function accountRequest(path: string, body?: object): Promise<AccountStatu
   return path === "logout" ? null : data as AccountStatus;
 }
 
-export function AccountPanel({ account, onChange, provider, disabled = false }: Props) {
+export function AccountPanel({ account, onChange, disabled = false }: Props) {
   const [registering, setRegistering] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -80,7 +79,6 @@ export function AccountPanel({ account, onChange, provider, disabled = false }: 
       <h2 id="trial-account-title">{account ? "Vos mots, vos crédits." : registering ? "Créer votre compte." : "Retrouver votre compte."}</h2>
       <p>{account ? <>Connecté avec {account.email}. Il vous reste <strong>{account.trial_remaining} crédit{account.trial_remaining > 1 ? "s" : ""}</strong> sur {account.trial_total} pour essayer la génération.</> : "La bêta est accessible sur invitation. Chaque compte reçoit 20 générations d’essai."}</p>
       {account && account.trial_remaining === 0 && !account.subscription_active && <p role="status">Vos crédits d’essai sont épuisés. L’abonnement sera proposé après l’ouverture des paiements.</p>}
-      <p className="preference-help">{provider === "openai" ? "Réplique transmet les conversations confirmées à OpenAI pour générer les réponses. Aucun compte ChatGPT personnel n’est demandé aux testeurs." : "Le modèle fonctionne sur le serveur Réplique. Aucun compte ChatGPT n’est nécessaire."}</p>
     </div>
     <div className="trial-account-actions">
       {account ? <button type="button" className="text-button" disabled={busy || disabled} onClick={logout}>Se déconnecter</button> : <>

@@ -3,14 +3,13 @@
 Une fois publié, le domaine `https://replique.duckdns.org` reçoit des comptes Réplique sur invitation.
 Chaque compte dispose de 20 générations d’essai. Le navigateur du visiteur ne
 voit ni connexion ChatGPT, ni jeton OAuth, ni identité du propriétaire. Après
-confirmation, le texte est envoyé par le serveur à OpenAI ; cette destination
-est annoncée dans l’interface. Une génération réussie consomme un crédit ; un
+une confirmation unique, le texte ou la capture est envoyé par le serveur à
+OpenAI ; cette destination est expliquée dans la page de confidentialité. Une génération réussie consomme un crédit ; un
 échec rend la réservation. La mémoire de style est facultative et séparée par
 compte Réplique ; seuls les exemples enregistrés volontairement peuvent être
 réutilisés après un nouvel accord pour chaque génération.
 
-**Limite réelle :** ce mode n’a pas encore été vérifié avec un compte ChatGPT
-réel. Le forfait, les scopes consentis, le catalogue de modèles et les limites
+Le mode a été vérifié avec une capture fictive et le modèle configuré. Le forfait, les scopes consentis, le catalogue de modèles et les limites
 d’utilisation sont décidés par OpenAI. Le fichier Codex `auth.json` n’est pas
 un substitut vérifié à cette autorisation : ne pas le copier dans le projet,
 l’image Docker ou un site public. Le parcours ci-dessous crée une session via
@@ -126,7 +125,7 @@ docker compose exec replique python -m backend.accounts invite
 ```
 
 Le visiteur s’inscrit avec ce code, voit son solde et confirme explicitement
-l’envoi de sa conversation à OpenAI. Vérifier avec un échange fictif que la
+l’envoi de sa conversation ou de sa capture pour analyse. Vérifier avec un échange fictif que la
 réponse arrive, que le solde passe de 20 à 19, qu’un échec ne coûte rien et
 qu’une requête sans compte est refusée. Mesurer la vitesse et les limites du
 forfait avec deux testeurs. Les comptes sont dans `data/accounts.sqlite3` ;
@@ -135,16 +134,14 @@ Sur téléphone, la page publique peut être ajoutée à l’écran d’accueil 
 le menu du navigateur. Ce raccourci ouvre l’interface sans clavier natif ni
 lecture automatique des messageries ; une connexion réseau reste nécessaire.
 
-Pour une capture de conversation, le visiteur accepte séparément l’envoi de
-l’image à OpenAI. Le modèle `REPLIQUE_MODEL` doit prendre en charge les images.
-La lecture remplit le champ texte, sans produire immédiatement de réponse : le
-visiteur relit et attribue les messages, confirme l’envoi du texte, puis clique
-sur « Trouver mes mots ». L’extraction ne retire pas de crédit d’essai, mais
-utilise le forfait ChatGPT du propriétaire et est limitée à 30 images par jour
-et par compte. Les captures PNG/JPG/WebP et les photos HEIC/HEIF de 10 Mo
-maximum sont acceptées. Une photo sans texte de conversation lisible doit être
-remplacée par une capture plus nette ou transcrite manuellement. En cas d’échec,
-le brouillon reste visible et la même image peut être relue après un nouvel accord.
+Pour une capture de conversation, le navigateur montre un aperçu et conserve le
+fichier jusqu’au clic sur « Trouver mes mots ». Le même accord couvre l’envoi de
+l’image et la génération. Le modèle `REPLIQUE_MODEL` analyse directement la
+capture et propose trois réponses en un seul appel ; aucun OCR ni repère « Moi »
+ou « Autre personne » n’est affiché dans ce parcours. Les captures PNG/JPG/WebP
+et les photos HEIC/HEIF de 10 Mo maximum sont acceptées. Une image illisible ou
+dont le dernier auteur reste incertain demande une capture plus nette sans
+consommer de crédit. Le fichier n’est pas conservé comme fichier par Réplique.
 
 L’abonnement payant n’est pas ouvert : après 20 crédits, Réplique l’indique
 sans accepter de paiement. Avant une offre commerciale mondiale, choisir un
@@ -156,7 +153,7 @@ un SaaS payant.
 ## Limites et suivi privé
 
 Avec `deploy/nginx-https.conf`, Nginx limite par adresse IP les connexions à
-5/minute, les générations et l’OCR à 12/minute, avec de petites rafales. Le
+5/minute, les générations texte/image et l’OCR historique à 12/minute, avec de petites rafales. Le
 backend borne aussi chaque compte à 6 demandes de génération par minute,
 10 OCR par minute et 30 OCR par jour. Un dépassement renvoie HTTP 429 ; les échecs de mot de passe ne
 verrouillent plus le compte d’une victime. Vérifier `nginx -t` avant de recharger

@@ -139,6 +139,68 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertTrue(vision.await_args.args[1][1]["image_url"].startswith("data:image/jpeg;base64,"))
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
 
+    def test_direct_image_generation_uses_one_call_and_one_credit(self):
+        self.provision()
+        self.register()
+        options = {"intent": "répondre naturellement", "tone": "naturel", "conversation": "Répondre avec douceur.",
+                   "consent": True, "context_confirmed": True}
+        upload = {"file": ("capture.png", image_bytes(), "image/png")}
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps({**PROVIDER_ANSWER, "context_clear": True})) as vision:
+            response = self.client.post("/api/generate-image", headers=HEADERS, files=upload,
+                                        data={"options": json.dumps(options)})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["mode"], "hosted")
+        self.assertNotIn("OpenAI", response.text)
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
+        vision.assert_awaited_once()
+        content = vision.await_args.args[1]
+        self.assertEqual(len(content), 2)
+        self.assertEqual(content[1]["type"], "input_image")
+        self.assertTrue(content[1]["image_url"].startswith("data:image/png;base64,"))
+        self.assertEqual(json.loads(content[0]["text"])["note"], "Répondre avec douceur.")
+
+    def test_direct_image_requires_consent_and_releases_credit_on_uncertainty(self):
+        self.provision()
+        self.register()
+        upload = {"file": ("capture.png", image_bytes(), "image/png")}
+        options = {"intent": "répondre naturellement", "consent": False, "context_confirmed": False}
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock) as vision:
+            denied = self.client.post("/api/generate-image", headers=HEADERS, files=upload,
+                                      data={"options": json.dumps(options)})
+            self.assertEqual(denied.status_code, 403)
+            vision.assert_not_called()
+        options.update(consent=True, context_confirmed=True)
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps({**PROVIDER_ANSWER, "context_clear": False})):
+            uncertain = self.client.post("/api/generate-image", headers=HEADERS, files=upload,
+                                         data={"options": json.dumps(options)})
+        self.assertEqual(uncertain.status_code, 422, uncertain.text)
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
+
+    def test_direct_image_blocks_foreign_origin_and_invalid_image(self):
+        self.provision()
+        self.register()
+        options = json.dumps({"intent": "répondre naturellement", "consent": True, "context_confirmed": True})
+        upload = {"file": ("capture.png", image_bytes(), "image/png")}
+        foreign = self.client.post("/api/generate-image", headers={"Origin": "https://foreign.example", "X-Replique-Request": "1"},
+                                   files=upload, data={"options": options})
+        self.assertEqual(foreign.status_code, 403)
+        invalid = self.client.post("/api/generate-image", headers=HEADERS,
+                                   files={"file": ("fake.png", b"not an image", "image/png")}, data={"options": options})
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
+
+    def test_hosted_plain_message_needs_no_speaker_prefix(self):
+        self.provision()
+        self.register()
+        payload = {**BASE_REQUEST, "conversation": "Tu viens samedi ?", "consent": True, "context_confirmed": True}
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps(PROVIDER_ANSWER)) as provider:
+            response = self.client.post("/api/generate", headers=HEADERS, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        sent = json.loads(provider.await_args.args[1])
+        self.assertEqual(sent["messages"], [{"speaker": "other", "text": "Tu viens samedi ?"}])
     def test_hosted_photo_has_daily_limit_and_releases_credit_after_failure(self):
         self.provision()
         self.register()

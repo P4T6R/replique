@@ -13,12 +13,12 @@ Un atelier français pour préparer une réponse qui respecte votre intention et
 
 ## Connexion ChatGPT (parcours local historique)
 
-Le parcours OAuth local et Responses est implémenté et vérifié sur des services simulés. Il n’a pas encore été connecté à un compte réel ; la bêta hébergée utilise une session créée par ce parcours, jamais la connexion des visiteurs. [OAUTH.md](OAUTH.md) décrit le parcours local et ses limites.
+Le parcours OAuth local et Responses est implémenté. La bêta hébergée utilise une session du propriétaire créée par ce parcours, jamais la connexion des visiteurs. [OAUTH.md](OAUTH.md) décrit le parcours local et ses limites.
 
 ## Ce que vous pouvez essayer
 
-- Coller une conversation en attribuant les messages à `Moi :` et `Autre personne :`.
-- Importer une capture PNG/JPEG/WebP/HEIC de 10 Mo maximum, extraire son texte avec Tesseract local ou, en mode ChatGPT et sur le site hébergé, avec OpenAI après un accord distinct, puis corriger le texte et confirmer les auteurs. Une erreur conserve le brouillon et permet de réessayer la même image après un nouvel accord.
+- Sur le site hébergé, coller le dernier message reçu ou choisir une capture PNG/JPEG/WebP/HEIC de 10 Mo maximum. La capture reste dans le navigateur jusqu’au clic sur « Trouver mes mots » ; une seule confirmation couvre son envoi et la génération directe des réponses. Aucun texte extrait ni attribution manuelle des auteurs n’est demandé.
+- Dans les modes locaux historiques, coller une conversation avec `Moi :` et `Autre personne :`, ou extraire le texte d’une capture avant de le relire.
 - Choisir une intention, un ton, des préférences de style et l’utilisation d’un emoji.
 - Lire trois formulations et une brève explication éditoriale, les modifier, les copier ou les exporter en texte.
 - Effacer la session. L’utilisateur garde la décision et envoie lui-même dans sa messagerie.
@@ -27,7 +27,7 @@ Le parcours OAuth local et Responses est implémenté et vérifié sur des servi
 
 Par défaut, aucun modèle n’est appelé. Seuls les exemples fictifs accessibles par « Essayer un exemple », « Réponses courtes », « Sans réponse » et « Un refus » permettent de générer des formulations préécrites. Coller votre propre conversation et en extraire le texte reste possible, mais obtenir des réponses adaptées nécessite une connexion ChatGPT ou un fournisseur IA configuré. Les préférences libres ne sont pas comprises en mode démo. La démo n’est pas une preuve de compréhension contextuelle. Une demande explicite de ne plus être contacté est traitée côté serveur et apparaît comme un bref conseil dans la zone de résultat habituelle, sans scénario visible dédié ni message à copier.
 
-L’adaptateur de fournisseur compatible Chat Completions est implémenté et testé avec des réponses simulées. Aucun appel payant ni test avec un fournisseur réel n’a été réalisé. La qualité rédactionnelle, le respect complet des faits et les garde-fous sémantiques du modèle restent à évaluer. Les validations de schéma ne constituent pas une garantie de sécurité ou d’exactitude.
+L’adaptateur historique compatible Chat Completions est testé avec des réponses simulées. Le parcours hébergé a aussi été vérifié avec une capture fictive et le modèle réel configuré. La qualité rédactionnelle, le respect complet des faits et les garde-fous sémantiques restent à évaluer. Les validations de schéma ne constituent pas une garantie de sécurité ou d’exactitude.
 
 ## Installation locale
 
@@ -62,18 +62,18 @@ Lire `backend/README.md` pour les variables d’environnement. Les secrets reste
 Le mode `live` facultatif nécessite un fournisseur compatible, un modèle
 disponible et éventuellement un compte facturé par ce fournisseur. La bêta
 hébergée utilise plutôt la session propriétaire créée séparément avec ChatGPT.
-Avant chaque génération distante, l’interface indique la destination et exige
-le consentement à l’envoi du texte. Une erreur fournisseur est affichée sans
+Avant chaque génération distante, l’interface demande un accord d’envoi ; la
+destination du parcours hébergé est détaillée dans la page de confidentialité. Une erreur fournisseur est affichée sans
 substitution silencieuse par la démo.
 
 ## Vie privée et limites
 
 - Mode temporaire par défaut : aucune génération, copie ou extraction OCR n’enregistre de conversation. La mémoire locale SQLite est alimentée uniquement par « Retenir ce choix » ou un enregistrement explicite du profil. Le témoin d’accueil peut rester dans localStorage ; aucun texte de conversation n’y est conservé.
 - Les conversations sont en mémoire dans le navigateur et traversent le serveur pour l’OCR/génération. En mode réel, elles sont envoyées au fournisseur configuré.
-- Les images OCR sont bornées en taille et dimensions et normalisées sans métadonnées. En mode ChatGPT et sur le site hébergé, l’image est envoyée à OpenAI uniquement après un accord distinct ; ailleurs, l’OCR est local. Le fournisseur applique ses propres conditions de traitement et conservation.
+- Les images sont bornées en taille et dimensions et normalisées sans métadonnées. Sur le site hébergé, la capture est envoyée à OpenAI avec l’intention et les préférences après l’accord unique ; elle n’est pas enregistrée comme fichier par Réplique. Le détail est accessible dans la page de confidentialité. Les modes locaux historiques conservent leur parcours OCR.
 - Effacer annule l’affichage des requêtes en cours et enlève l’état de cet atelier ; cela ne supprime pas les exports, le presse-papiers, les données déjà reçues par un fournisseur, les caches système ou les éventuels journaux d’une infrastructure externe.
 - Évitez les captures de tiers non nécessaires et retirez les coordonnées et données sensibles.
-- Tesseract est absent de certains environnements ; le mode ChatGPT peut alors demander une transcription OpenAI avec consentement distinct. Les petites polices et bulles complexes peuvent être mal lues. Relecture et attribution des auteurs obligatoires.
+- Les petites polices et bulles complexes peuvent être mal lues. Si le dernier message ou son auteur reste incertain sur la capture hébergée, Réplique demande une image plus nette sans consommer de crédit. Dans les modes OCR historiques, la relecture et l’attribution des auteurs restent obligatoires.
 - Les règles conservatrices de refus ne couvrent pas toutes les formulations possibles. Les instructions du fournisseur demandent de respecter un refus, de ne pas faire pression et de ne pas inventer faits ou sentiments. La décision finale reste humaine.
 - Aucun clavier natif, plugin de messagerie, envoi automatique, paiement ou hébergement n’est inclus. Le compte ChatGPT reste géré par OpenAI.
 

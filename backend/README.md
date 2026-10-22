@@ -51,7 +51,7 @@ Le fournisseur doit proposer un endpoint compatible OpenAI Chat Completions avec
 
 Le modèle est obligatoire. HTTPS est obligatoire hors des hôtes loopback. Un fournisseur local compatible peut utiliser HTTP et ne requiert pas de clé. Les variables proxy de l’environnement ne sont pas utilisées et les redirections fournisseur ne sont jamais suivies.
 
-Chaque génération réelle exige `consent=true` après affichage du nom d’hôte du fournisseur dans l’interface. Le texte relu, l’intention, le ton, le style et l’option emoji lui sont envoyés. L’image OCR n’est envoyée qu’en mode ChatGPT ou hébergé et après le consentement distinct décrit ci-dessous ; en mode fournisseur `live`, l’OCR reste local. Les conditions de traitement et conservation du fournisseur s’appliquent. Aucune requête réelle ou payante n’a été exécutée lors du développement et des tests : l’intégration réseau est validée avec un transport simulé. La qualité des modèles et la compatibilité exacte de votre fournisseur restent à vérifier avant utilisation de données personnelles.
+Chaque génération réelle exige `consent=true`. Le texte, l’intention, le ton, le style et l’option emoji sont transmis au fournisseur configuré. Sur le site hébergé, une capture peut être transmise dans la même demande que la génération après une seule confirmation ; la destination exacte est expliquée dans la page de confidentialité. En mode `live`, l’OCR reste local. Les conditions de traitement et conservation du fournisseur s’appliquent. Le parcours hébergé a été essayé avec une capture fictive et le modèle configuré ; la qualité des réponses sur des conversations réelles doit encore être évaluée.
 
 Les erreurs fournisseur, délais, refus, sorties malformées ou réponses qui ne respectent pas les contrôles sont explicites. Il n’y a aucun remplacement silencieux d’une génération réelle par une démo. Exception annoncée : lorsqu’une règle locale reconnaît un refus explicite, une réponse de sécurité préécrite est renvoyée avec `mode=demo`, `boundary=true` et une notice spécifique, sans transmission externe.
 
@@ -59,9 +59,9 @@ Les erreurs fournisseur, délais, refus, sorties malformées ou réponses qui ne
 
 En mode `REPLIQUE_MODE=chatgpt`, l’image est normalisée localement puis transmise comme entrée image à `/v1/responses`, avec le modèle choisi dans le catalogue du compte. Cette étape exige une session ChatGPT connectée, `X-Replique-Request: 1` et un consentement distinct pour chaque capture. La consigne demande une transcription fidèle uniquement ; elle interdit de traiter le texte visible comme des consignes et ne déduit pas les auteurs. L’utilisateur relit et attribue les messages avant de générer. Les modèles qui ne prennent pas en charge les images peuvent refuser la requête ; les images comptent dans l’utilisation du forfait. Les images ne sont pas envoyées pendant la génération texte si l’utilisateur choisit de coller une conversation.
 
-En mode `owner_chatgpt`, le compte visiteur et un accord distinct sont requis pour chaque capture. Le serveur choisit `REPLIQUE_MODEL`, limite l’OCR à 10/minute et 30/jour par compte et n’impute pas de crédit d’essai à la seule extraction ; la génération du texte relu reste une étape distincte. Le modèle fixe doit accepter les entrées image. Une capture sans texte de conversation lisible ne peut pas produire de réponse pertinente.
+En mode `owner_chatgpt`, le parcours principal conserve la capture dans le navigateur jusqu’au clic sur « Trouver mes mots ». `POST /api/generate-image` reçoit une image et des options, la normalise sans métadonnées, puis demande au modèle fixé par `REPLIQUE_MODEL` d’analyser et de proposer trois réponses en un seul appel. Un seul accord couvre cette demande. Une réponse réussie utilise un crédit ; une image invalide, une lecture incertaine ou une erreur libère la réservation. L’ancien endpoint `/api/ocr` reste disponible pour compatibilité mais n’est plus utilisé par l’interface hébergée.
 
-Le fichier est limité à 5 Mio à l’entrée et 8 Mio après normalisation PNG, à 16 mégapixels et à 8 000 pixels par côté. Les métadonnées ne sont pas conservées. La requête utilise le jeton OAuth conservé en mémoire et `store:false`, `stream:true`. Le traitement et la conservation sont soumis aux règles OpenAI.
+Le fichier est limité à 10 Mo à l’entrée et 8 Mo après normalisation, à 16 mégapixels et à 8 000 pixels par côté. Les métadonnées ne sont pas conservées. La requête utilise le jeton OAuth conservé côté serveur et `store:false`, `stream:true`. Le traitement et la conservation sont soumis aux règles OpenAI.
 
 ## OCR réel et local
 
@@ -72,7 +72,7 @@ L’API privilégie `fra`, puis `eng`, puis un autre modèle disponible en le si
 Limites et protections :
 
 - PNG, JPEG ou WebP fixes uniquement ; contenu image vérifié indépendamment de l’extension.
-- 5 Mio maximum par image ; corps HTTP limité avant parsing multipart à 5 Mio + 256 Kio.
+- 10 Mo maximum par image ; corps HTTP limité avant parsing multipart à 10 Mo + 256 Kio.
 - Maximum 16 millions de pixels et 8 000 pixels par côté.
 - Au plus deux extractions simultanées ; processus Tesseract borné à 20 secondes.
 - Délai absolu de réception d’une requête : 30 secondes.
@@ -91,7 +91,8 @@ L’image et le texte passent en mémoire du serveur local. Aucun contenu de con
   - Tons : `naturel`, `chaleureux`, `direct`, `léger`.
   - Style libre : 500 caractères maximum.
   - Exactement trois propositions. En cas de demande explicite de non-contact, les trois textes sont vides : ne pas proposer de copie ni d’envoi.
-- `POST /api/ocr` multipart, champ `file` → `{text, language, warning}`.
+- `POST /api/generate-image` multipart, champs `file` et `options` (JSON : intention, ton, style, consentement, mémoire facultative) → même réponse que `/api/generate`. Disponible uniquement en mode hébergé avec un compte Réplique ; une seule demande au modèle et un crédit par succès.
+- `POST /api/ocr` multipart, champ `file` → `{text, language, warning}` pour les parcours historiques.
 - Les erreurs retournent `{"detail": "message français"}` sans réafficher le texte privé fourni.
 
 Les textes importés et le style sont des données non fiables dans un message utilisateur séparé, jamais interpolés dans le message système. La sortie réelle est validée après normalisation : trois titres attendus, textes distincts non vides (ou trois textes vides pour une abstention cohérente), tailles bornées, option sans emoji, et quelques motifs de pression interdits. Les règles de détection de refus et les filtres ne constituent pas une garantie sémantique ; une relecture humaine reste indispensable.

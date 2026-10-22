@@ -16,12 +16,12 @@ window.fetch = async (url, options = {}) => {
     : url === "/api/account/status" ? { detail: statusFailure ? "Service indisponible." : "Connectez-vous." }
     : url === "/api/account/register" ? { email: "beta@example.test", trial_remaining: remaining, trial_total: 20, subscription_active: false, subscription_available: false }
     : url === "/api/ocr" ? { text: "Bonjour depuis la capture", warning: "Texte extrait. Relisez-le avant de continuer." }
-    : url === "/api/generate" ? { mode, notice: "Propositions Réplique", insight: "Une proposition", boundary: false, replies: [
+    : url === "/api/generate" || url === "/api/generate-image" ? { mode, notice: "Propositions Réplique", insight: "Une proposition", boundary: false, replies: [
       { id: "1", title: "Simple", text: "Bonjour.", why: "Court." },
       { id: "2", title: "Plus chaleureuse", text: "Salut, ça va ?", why: "Amical." },
       { id: "3", title: "Plus directe", text: "On se voit ?", why: "Direct." },
     ] } : {};
-  if (url === "/api/generate") remaining--;
+  if (url === "/api/generate" || url === "/api/generate-image") remaining--;
   if (url === "/api/account/status" && !statusFailure && calls.some(call => call.url === "/api/account/register")) Object.assign(data, { email: "beta@example.test", trial_remaining: remaining, trial_total: 20, subscription_active: false, subscription_available: false });
   const ok = (url !== "/api/account/status" || !!data.email) && !(url === "/api/ocr" && ocrFailure);
   return { ok, status: ok ? 200 : url === "/api/ocr" || statusFailure ? 503 : 401,
@@ -54,9 +54,33 @@ assert.ok(document.querySelector(".memory-panel"));
 assert.equal(calls.filter(call => call.url === "/api/auth/status").length, 0);
 assert.equal(calls.filter(call => call.url === "/api/account/register").length, 1);
 if (mode === "hosted") {
-  assert.match(document.querySelector(".trial-account")?.textContent || "", /OpenAI/);
-  assert.match(document.querySelector(".consent")?.textContent || "", /à OpenAI/);
+  assert.doesNotMatch(document.querySelector(".trial-account")?.textContent || "", /OpenAI|ChatGPT/);
+  assert.doesNotMatch(document.querySelector(".consent")?.textContent || "", /OpenAI|ChatGPT/);
   assert.doesNotMatch(document.body.textContent, /private-owner@example\.test/);
+  assert.equal(document.querySelector(".ocr-consent"), null);
+  assert.equal(document.querySelector(".context-sheet label.check"), null);
+  const importButton = [...document.querySelectorAll(".input-tools button")].find(button => button.textContent.includes("Importer"));
+  assert.equal(importButton.disabled, false);
+  const fileInput = document.querySelector('input[type="file"]');
+  Object.defineProperty(fileInput, "files", { configurable: true, value: [new window.File(["image"], "capture.png", { type: "image/png" })] });
+  fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => document.querySelector(".selected-photo")?.textContent.includes("capture.png"));
+  assert.equal(calls.filter(call => call.url === "/api/ocr").length, 0);
+  assert.ok(document.querySelector(".compose .primary").disabled);
+  document.querySelector(".consent input").click();
+  await waitFor(() => !document.querySelector(".compose .primary").disabled);
+  document.querySelector(".compose").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+  await waitFor(() => document.querySelectorAll(".reply").length === 3);
+  const sent = calls.find(call => call.url === "/api/generate-image");
+  assert.equal(sent.options.body.get("file").name, "capture.png");
+  assert.equal(JSON.parse(sent.options.body.get("options")).context_confirmed, true);
+  assert.equal(JSON.parse(sent.options.body.get("options")).consent, true);
+  assert.ok(document.querySelector(".compose .primary").disabled);
+  assert.equal(document.querySelector(".selected-photo") !== null, true);
+  assert.equal(document.querySelector("a[href='/confidentialite.html']") !== null, true);
+  console.log("PASS hosted beta UI: one consent, direct image generation, no OCR or provider branding.");
+  dom.window.close();
+  process.exit(0);
 }
 const ocrConsent = document.querySelector(".ocr-consent input");
 const importButton = [...document.querySelectorAll(".input-tools button")].find(button => button.textContent.includes("Importer"));
