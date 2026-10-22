@@ -35,7 +35,7 @@ try {
       ocrAttempts++;
       if (mode === "hosted") assert.match(route.request().postData() || "", /name="consent"\r?\n\r?\ntrue/);
       if (ocrAttempts === 1) { status = 422; body = { detail: "Aucun texte lisible n’a été détecté." }; }
-      else body = { text: "Autre personne : Bonjour depuis la capture", warning: "Texte extrait. Relisez-le avant de continuer." };
+      else body = { text: "Bonjour depuis la capture", warning: "Texte extrait. Relisez-le avant de continuer." };
     } else { status = 404; body = { detail: "Route absente" }; }
     await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   });
@@ -66,6 +66,12 @@ try {
   await page.locator(".ocr-note").getByText(/Relisez-le/).waitFor();
   assert.equal(ocrAttempts, 2);
   assert.equal(await page.getByRole("button", { name: "Trouver mes mots" }).isDisabled(), true);
+  await page.locator("#conversation").click();
+  await page.getByRole("button", { name: "Autre personne", exact: true }).click();
+  assert.equal(await page.locator("#conversation").inputValue(), "Autre personne : Bonjour depuis la capture");
+  await page.getByLabel("J’ai relu le texte").check();
+  await page.locator(".consent input").check();
+  assert.equal(await page.getByRole("button", { name: "Trouver mes mots" }).isEnabled(), true);
   await page.getByRole("button", { name: "Essayer un exemple" }).click();
   await page.getByLabel("J’ai relu le texte").check();
   await page.locator(".consent input").check();

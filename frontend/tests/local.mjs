@@ -15,7 +15,7 @@ window.fetch = async (url, options = {}) => {
   const data = url === "/api/health" ? { mode, provider: mode === "hosted" ? "OpenAI" : "serveur Réplique", ocr_available: true, ocr_languages: ["fra"] }
     : url === "/api/account/status" ? { detail: statusFailure ? "Service indisponible." : "Connectez-vous." }
     : url === "/api/account/register" ? { email: "beta@example.test", trial_remaining: remaining, trial_total: 20, subscription_active: false, subscription_available: false }
-    : url === "/api/ocr" ? { text: "Autre personne : Bonjour depuis la capture", warning: "Texte extrait. Relisez-le avant de continuer." }
+    : url === "/api/ocr" ? { text: "Bonjour depuis la capture", warning: "Texte extrait. Relisez-le avant de continuer." }
     : url === "/api/generate" ? { mode, notice: "Propositions Réplique", insight: "Une proposition", boundary: false, replies: [
       { id: "1", title: "Simple", text: "Bonjour.", why: "Court." },
       { id: "2", title: "Plus chaleureuse", text: "Salut, ça va ?", why: "Amical." },
@@ -74,14 +74,28 @@ assert.match(document.querySelector(".ocr-note")?.textContent || "", /Relisez/);
 assert.equal(calls.find(call => call.url === "/api/ocr")?.options.body.get("consent"), mode === "hosted" ? "true" : "false");
 assert.ok(document.querySelector(".compose .primary").disabled);
 const conversation = document.querySelector("#conversation");
+const speakerButtons = [...document.querySelectorAll(".speaker-tools button")];
+assert.deepEqual(speakerButtons.map(button => button.textContent), ["Moi", "Autre personne"]);
+conversation.setSelectionRange(0, 0);
+speakerButtons[1].click();
+await waitFor(() => conversation.value === "Autre personne : Bonjour depuis la capture");
+const confirmed = document.querySelector(".context-sheet label.check:not(.ocr-consent) input");
+const consent = document.querySelector(".consent input");
+confirmed.click(); consent.click();
+await waitFor(() => !document.querySelector(".compose .primary").disabled);
 const setConversation = value => {
   Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set.call(conversation, value);
   conversation.dispatchEvent(new window.Event("input", { bubbles: true }));
 };
+setConversation("En-tête de la capture\nBonjour");
+await waitFor(() => conversation.value.includes("En-tête"));
+conversation.setSelectionRange(conversation.value.indexOf("Bonjour"), conversation.value.indexOf("Bonjour"));
+speakerButtons[1].click();
+await waitFor(() => conversation.value.endsWith("Autre personne : Bonjour"));
+assert.ok(document.querySelector(".compose .primary").disabled);
+assert.match(document.querySelector(".generation-hint").textContent, /en-têtes/);
 setConversation("Moi : Bonjour\nAutre personne : Salut");
 await waitFor(() => conversation.value.includes("Salut"));
-const confirmed = document.querySelector(".context-sheet label.check:not(.ocr-consent) input");
-const consent = document.querySelector(".consent input");
 confirmed.click(); consent.click();
 await waitFor(() => consent.checked && confirmed.checked);
 setConversation("Moi : Salut\nAutre personne : Bonjour");

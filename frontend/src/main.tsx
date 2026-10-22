@@ -120,6 +120,7 @@ function App() {
     return () => { current = false; };
   }, [useMemory, intent, tone, locale, memoryRevision]);
   const file = useRef<HTMLInputElement>(null),
+    conversationInput = useRef<HTMLTextAreaElement>(null),
     pendingPhoto = useRef<File | null>(null),
     generation = useRef(0),
     abort = useRef<AbortController | null>(null),
@@ -243,6 +244,25 @@ function App() {
     setError("");
     setOcrError("");
     setOcrNotice("");
+  }
+  function attributeLine(speaker: "Moi" | "Autre personne") {
+    const input = conversationInput.current;
+    if (!input || !conversation.trim()) return;
+    const lineStart = conversation.lastIndexOf("\n", Math.max(0, input.selectionStart - 1)) + 1;
+    const lineEnd = conversation.indexOf("\n", lineStart);
+    const end = lineEnd < 0 ? conversation.length : lineEnd;
+    const line = conversation.slice(lineStart, end);
+    if (!line.trim()) return;
+    const leading = line.match(/^\s*/)?.[0] || "";
+    const message = line.slice(leading.length).replace(/^(?:Moi|Autre personne)\s*:\s*/i, "");
+    const replacement = `${leading}${speaker} : ${message}`;
+    if (conversation.length - line.length + replacement.length > 12000) return;
+    updateConversation(conversation.slice(0, lineStart) + replacement + conversation.slice(end));
+    setTimeout(() => {
+      input.focus();
+      const cursor = lineStart + replacement.length;
+      input.setSelectionRange(cursor, cursor);
+    }, 0);
   }
   function reset() {
     generation.current++;
@@ -447,7 +467,8 @@ function App() {
     if (health.mode === "chatgpt" && (!auth?.sharing || auth.status !== "connected" || !model)) return "Connectez ChatGPT et choisissez un modèle.";
     if (conversation.trim().length < 5) return "Ajoutez le message auquel vous voulez répondre.";
     if (health.mode === "demo" && ![sample, brief, unanswered, refusal].includes(conversation)) return "La démo accepte uniquement les exemples fictifs proposés.";
-    if (!/^\s*Autre personne\s*:/im.test(conversation)) return "Indiquez au moins un message commençant par « Autre personne : ».";
+    if (!/^\s*(?:Moi|Autre personne)\s*:/i.test(conversation)) return "Commencez par un message attribué : retirez les en-têtes, puis cliquez dans la première phrase et choisissez son auteur ci-dessus.";
+    if (!/^\s*Autre personne\s*:/im.test(conversation)) return "Attribuez au moins un message reçu avec le bouton « Autre personne ».";
     if (!confirmed) return "Relisez l’échange et cochez la confirmation sous le texte.";
     if (useMemory && memoryError) return "La mémoire est indisponible. Désactivez son utilisation ou réessayez.";
     if (useMemory && !memoryPreview) return "Vérification de votre mémoire en cours.";
@@ -579,6 +600,7 @@ function App() {
             </label>
             <textarea
               id="conversation"
+              ref={conversationInput}
               disabled={!!busy}
               className="conversation"
               maxLength={12000}
@@ -590,6 +612,14 @@ function App() {
               }
               aria-describedby="context-help"
             />
+            {!!conversation.trim() && <div className="speaker-tools" role="group" aria-label="Attribuer le message sélectionné">
+              <span>Qui a écrit la ligne où se trouve le curseur ?</span>
+              <div>
+                <button type="button" disabled={!!busy} onClick={() => attributeLine("Moi")}>Moi</button>
+                <button type="button" disabled={!!busy} onClick={() => attributeLine("Autre personne")}>Autre personne</button>
+              </div>
+              <small>Cliquez dans chaque message au changement d’auteur. Retirez les numéros et les en-têtes ; les lignes suivantes gardent le même auteur jusqu’au prochain repère.</small>
+            </div>}
             <div className="input-caption">
               <span id="context-help">
                 Retirez les noms et détails sensibles. Indiquez qui parle.
