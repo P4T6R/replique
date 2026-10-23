@@ -147,7 +147,7 @@ class OwnerProviderTests(unittest.TestCase):
                    "consent": True, "context_confirmed": True}
         upload = {"file": ("capture.png", image_bytes(), "image/png")}
         with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
-                   return_value=json.dumps({**PROVIDER_ANSWER, "context_clear": True})) as vision:
+                   return_value=json.dumps({**PROVIDER_ANSWER, "context_clear": True, "sparse_followup": False})) as vision:
             response = self.client.post("/api/generate-image", headers=HEADERS, files=upload,
                                         data={"options": json.dumps(options)})
         self.assertEqual(response.status_code, 200, response.text)
@@ -164,6 +164,40 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(json.loads(content[0]["text"])["note"], "Répondre avec douceur.")
         self.assertIsInstance(date.fromisoformat(json.loads(content[0]["text"])["current_date_utc"]), date)
 
+    def test_sparse_photo_followup_returns_one_natural_suggestion(self):
+        self.provision()
+        self.register()
+        options = {"intent": "relancer", "tone": "léger", "conversation": "Son prénom est Audrey.",
+                   "consent": True, "context_confirmed": True}
+        answer = {"context_clear": True, "sparse_followup": True,
+                  "insight": "Les nouvelles ont déjà été échangées ; aucun autre sujet concret n'est visible.",
+                  "replies": [{"title": "Simple", "text": "Salut Audrey, quoi de neuf ?",
+                               "why": "Une reprise légère, sans insister."}]}
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps(answer)) as vision:
+            response = self.client.post("/api/generate-image", headers=HEADERS,
+                                        files={"file": ("capture.png", image_bytes(), "image/png")},
+                                        data={"options": json.dumps(options)})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["replies"]), 1)
+        self.assertEqual(response.json()["replies"][0]["text"], "Salut Audrey, quoi de neuf ?")
+        self.assertIn("Proposition générée", response.json()["notice"])
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
+        self.assertIn("sparse_followup", vision.await_args.args[0])
+
+    def test_sparse_photo_followup_rejects_three_filler_replies_without_charging(self):
+        self.provision()
+        self.register()
+        answer = {**PROVIDER_ANSWER, "context_clear": True, "sparse_followup": True}
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps(answer)):
+            response = self.client.post("/api/generate-image", headers=HEADERS,
+                                        files={"file": ("capture.png", image_bytes(), "image/png")},
+                                        data={"options": json.dumps({"intent": "relancer", "consent": True,
+                                                                     "context_confirmed": True})})
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
+
     def test_direct_image_requires_consent_and_releases_credit_on_uncertainty(self):
         self.provision()
         self.register()
@@ -176,7 +210,7 @@ class OwnerProviderTests(unittest.TestCase):
             vision.assert_not_called()
         options.update(consent=True, context_confirmed=True)
         with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
-                   return_value=json.dumps({**PROVIDER_ANSWER, "context_clear": False})):
+                   return_value=json.dumps({**PROVIDER_ANSWER, "context_clear": False, "sparse_followup": False})):
             uncertain = self.client.post("/api/generate-image", headers=HEADERS, files=upload,
                                          data={"options": json.dumps(options)})
         self.assertEqual(uncertain.status_code, 422, uncertain.text)

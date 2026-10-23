@@ -16,7 +16,9 @@ window.fetch = async (url, options = {}) => {
     : url === "/api/account/status" ? { detail: statusFailure ? "Service indisponible." : "Connectez-vous." }
     : url === "/api/account/register" ? { email: "beta@example.test", trial_remaining: remaining, trial_total: 20, subscription_active: false, subscription_available: false }
     : url === "/api/ocr" ? { text: "Bonjour depuis la capture", warning: "Texte extrait. Relisez-le avant de continuer." }
-    : url === "/api/generate" || url === "/api/generate-image" ? { mode, notice: "Propositions Réplique", insight: "Une proposition", boundary: false, replies: [
+    : url === "/api/generate" || url === "/api/generate-image" ? { mode, notice: "Propositions Réplique", insight: "Une proposition", boundary: false, replies: url === "/api/generate-image" ? [
+      { id: "1", title: "Simple", text: "Salut, quoi de neuf ?", why: "Une reprise naturelle." },
+    ] : [
       { id: "1", title: "Simple", text: "Bonjour.", why: "Court." },
       { id: "2", title: "Plus chaleureuse", text: "Salut, ça va ?", why: "Amical." },
       { id: "3", title: "Plus directe", text: "On se voit ?", why: "Direct." },
@@ -74,7 +76,8 @@ if (mode === "hosted") {
   document.querySelector(".consent input").click();
   await waitFor(() => !document.querySelector(".compose .primary").disabled);
   document.querySelector(".compose").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
-  await waitFor(() => document.querySelectorAll(".reply").length === 3);
+  await waitFor(() => document.querySelectorAll(".reply").length === 1);
+  assert.match(document.querySelector(".answers h2")?.textContent || "", /Une piste/);
   const sent = calls.find(call => call.url === "/api/generate-image");
   assert.equal(sent.options.body.get("file").name, "capture.png");
   assert.equal(JSON.parse(sent.options.body.get("options")).context_confirmed, true);
