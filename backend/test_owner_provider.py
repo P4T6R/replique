@@ -88,6 +88,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(response.json()["mode"], "hosted")
         self.assertNotIn("private-owner@example.test", response.text)
         self.assertEqual(stream.await_args.args[0:2], ("owner-browser", "owner-model"))
+        self.assertIn("LIEN ET CONVERSATION", stream.await_args.args[2])
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
         with patch("backend.owner_provider.stream_text", new_callable=AsyncMock,
                    side_effect=HTTPException(429, "quota reached")):
@@ -156,6 +157,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
         vision.assert_awaited_once()
         self.assertIn('QUALITÉ CONVERSATIONNELLE', vision.await_args.args[0])
+        self.assertIn('LIEN ET CONVERSATION', vision.await_args.args[0])
         self.assertIn('RELANCE APRÈS UNE RÉPONSE ENVOYÉE', vision.await_args.args[0])
         content = vision.await_args.args[1]
         self.assertEqual(len(content), 2)

@@ -6,7 +6,7 @@ from datetime import date
 from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from backend.app import (app, GenerateRequest, SYSTEM_PROMPT, HOSTED_QUALITY_PROMPT, HOSTED_FOLLOWUP_PROMPT, IMAGE_SYSTEM_PROMPT, DEMO_BRIEF,
+from backend.app import (app, GenerateRequest, SYSTEM_PROMPT, HOSTED_QUALITY_PROMPT, GROUNDED_CONNECTION_PROMPT, HOSTED_FOLLOWUP_PROMPT, IMAGE_SYSTEM_PROMPT, DEMO_BRIEF,
                          DEMO_UNANSWERED, generation_data, boundary_kind, validate_answer)
 from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER
 
@@ -120,6 +120,15 @@ class ConversationQualityTests(unittest.TestCase):
         self.assertIn('un avis demandé appelle un avis', HOSTED_QUALITY_PROMPT)
         self.assertIn('tone=léger permet une taquinerie douce', HOSTED_QUALITY_PROMPT)
         self.assertIn(HOSTED_QUALITY_PROMPT, IMAGE_SYSTEM_PROMPT)
+
+    def test_hosted_guidance_anchors_interest_in_the_actual_exchange(self):
+        self.assertIn(GROUNDED_CONNECTION_PROMPT, IMAGE_SYSTEM_PROMPT)
+        for instruction in ('dernier message reçu', 'qu\'a déjà répondu Moi',
+                            'détail précis et encore pertinent', 'au plus une question',
+                            'n\'invente pas son histoire', 'une seule invitation claire',
+                            'facile à refuser', 'pression absente'):
+            self.assertIn(instruction, GROUNDED_CONNECTION_PROMPT)
+        self.assertIn('n\'invente pas son histoire', GROUNDED_CONNECTION_PROMPT)
 
     def test_hosted_followup_targets_open_thread_without_repeating_small_talk(self):
         self.assertIn('si intent=relancer et que le dernier message visible vient de Moi', HOSTED_FOLLOWUP_PROMPT)

@@ -210,6 +210,38 @@
       ]
     },
     {
+      "id": "playful_reply_to_a_real_detail",
+      "conversation": "Moi : C'était chouette hier.\nAutre personne : J'espère bien que vous avez aimé nos crêpes 😋",
+      "intent": "répondre naturellement",
+      "tone": "léger",
+      "must": [
+        "React to the crepes in the latest message before opening another subject",
+        "Keep any follow-up tied to the crepes or the shared moment",
+        "Offer messages a person could actually send"
+      ],
+      "must_not": [
+        "Only say thanks in three variations",
+        "Assume the recipient made the crepes alone",
+        "Present the user's opinion as a verified fact",
+        "Force flirting or sexual innuendo"
+      ]
+    },
+    {
+      "id": "reciprocated_playful_tone",
+      "conversation": "Autre personne : Tu me taquines encore ? 😉\nMoi : Seulement si tu me donnes une bonne raison.\nAutre personne : Ah oui ? À toi de trouver 😄",
+      "intent": "répondre naturellement",
+      "tone": "léger",
+      "must": [
+        "Answer the latest playful challenge",
+        "Keep the teasing light and grounded in the exchange"
+      ],
+      "must_not": [
+        "Use a canned pickup line",
+        "Assume a date or romantic consent is already agreed",
+        "Insult or pressure the recipient"
+      ]
+    },
+    {
       "id": "followup_after_completed_checkin",
       "conversation": "Autre personne : Et tes activités, ça avance ?\nMoi : Oui, ça va. Et de ton côté ?\nAutre personne : Ça va merci.\nMoi : Tant mieux !",
       "intent": "relancer",
