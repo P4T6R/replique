@@ -2,9 +2,9 @@
 
 Une fois publié, le domaine `https://replique.duckdns.org` reçoit des comptes Réplique sur invitation.
 Chaque compte dispose de 20 générations d’essai. Le navigateur du visiteur ne
-voit ni connexion ChatGPT, ni jeton OAuth, ni identité du propriétaire. Après
-une confirmation unique, le texte ou la capture est envoyé par le serveur à
-OpenAI ; cette destination est expliquée dans la page de confidentialité. Une génération réussie consomme un crédit ; un
+voit ni connexion ChatGPT, ni jeton OAuth, ni identité du propriétaire. Le clic sur
+« Ajouter une capture » ou « Trouver des réponses » lance l’analyse par le serveur ;
+le traitement par OpenAI est expliqué dans la page de confidentialité. Une génération réussie consomme un crédit ; un
 échec rend la réservation. La mémoire de style est facultative et séparée par
 compte Réplique ; seuls les exemples enregistrés volontairement peuvent être
 réutilisés après un nouvel accord pour chaque génération.
@@ -124,8 +124,8 @@ Créer une invitation unique :
 docker compose exec replique python -m backend.accounts invite
 ```
 
-Le visiteur s’inscrit avec ce code, voit son solde et confirme explicitement
-l’envoi de sa conversation ou de sa capture pour analyse. Vérifier avec un échange fictif que la
+Le visiteur s’inscrit avec ce code, voit son solde et crée une conversation
+dans `/app`. Vérifier avec un échange fictif que la
 réponse arrive, que le solde passe de 20 à 19, qu’un échec ne coûte rien et
 qu’une requête sans compte est refusée. Mesurer la vitesse et les limites du
 forfait avec deux testeurs. Les comptes sont dans `data/accounts.sqlite3` ;
@@ -134,14 +134,15 @@ Sur téléphone, la page publique peut être ajoutée à l’écran d’accueil 
 le menu du navigateur. Ce raccourci ouvre l’interface sans clavier natif ni
 lecture automatique des messageries ; une connexion réseau reste nécessaire.
 
-Pour une capture de conversation, le navigateur montre un aperçu et conserve le
-fichier jusqu’au clic sur « Trouver mes mots ». Le même accord couvre l’envoi de
-l’image et la génération. Le modèle `REPLIQUE_MODEL` analyse directement la
-capture et propose trois réponses en un seul appel ; aucun OCR ni repère « Moi »
-ou « Autre personne » n’est affiché dans ce parcours. Les captures PNG/JPG/WebP
-et les photos HEIC/HEIF de 10 Mo maximum sont acceptées. Une image illisible ou
-dont le dernier auteur reste incertain demande une capture plus nette sans
-consommer de crédit. Le fichier n’est pas conservé comme fichier par Réplique.
+La page publique `/` présente le produit ; `/app` contient les conversations privées
+du compte. Une capture PNG/JPG/WebP ou HEIC/HEIF de 10 Mo maximum est lue une fois,
+ses bulles et leurs auteurs sont ajoutés à l’historique, puis une génération propose
+trois réponses. Le fichier image n’est pas conservé. Le visiteur peut corriger ou
+retirer une bulle mal lue. Il peut aussi coller un échange en texte, indiquer son
+objectif et son style, copier une proposition et confirmer séparément le message
+qu’il a réellement envoyé. La réponse suivante se saisit dans la même conversation.
+Réplique ne publie aucun message dans la messagerie d’origine. Chaque compte ne
+peut voir que ses propres conversations ; leur suppression est disponible dans `/app`.
 
 L’abonnement payant n’est pas ouvert : après 20 crédits, Réplique l’indique
 sans accepter de paiement. Avant une offre commerciale mondiale, choisir un
@@ -180,7 +181,7 @@ de nouveaux testeurs jusqu’au diagnostic.
 Arrêter brièvement les écritures pendant la copie, car les bases de mémoire sont
 distinctes de la base des comptes. Créer un dossier privé et un instantané
 cohérent de SQLite. Le snapshot contient
-**la base des comptes, les mémoires par compte, la session propriétaire et sa clé** : son accès équivaut
+**la base des comptes et des conversations, les mémoires par compte, la session propriétaire et sa clé** : son accès équivaut
 à celui du compte propriétaire. Le transférer hors du VPS vers un stockage
 chiffré contrôlé par vous, puis supprimer la copie temporaire du VPS. Ne jamais
 le placer dans Git, dans l’image Docker ou sur un espace public.

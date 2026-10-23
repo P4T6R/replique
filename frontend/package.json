@@ -10,7 +10,7 @@
     "test:photo": "node tests/photo-browser.mjs",
     "test:e2e:local": "node tests/local-browser.mjs",
     "test:e2e:hosted": "node tests/local-browser.mjs hosted",
-    "test": "node tests/dom.mjs && node tests/contrast.mjs && node tests/memory.mjs && node tests/local.mjs && node tests/local.mjs hosted"
+    "test": "node tests/dom.mjs && node tests/contrast.mjs && node tests/memory.mjs && node tests/local.mjs && node tests/hosted.mjs"
   },
   "dependencies": {
     "react": "19.2.0",

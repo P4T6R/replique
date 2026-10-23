@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 import { MemoryPanel, SaveMemory, memoryRequest, type MemoryPreview } from "./Memory";
 import { AccountPanel, type AccountStatus } from "./Account";
+import { HostedLanding, HostedWorkspace } from "./Hosted";
 type Health = {
   mode: "demo" | "live" | "chatgpt" | "local" | "hosted";
   ocr_available: boolean;
@@ -941,4 +942,14 @@ function App() {
     </div>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);
+function Entry() {
+  const [hosted, setHosted] = useState<boolean | null>(null);
+  useEffect(() => {
+    fetch("/api/health").then(response => response.json()).then(data => setHosted(data.mode === "hosted"))
+      .catch(() => setHosted(window.location.pathname === "/app" || window.location.hostname === "replique.duckdns.org" || (window.location.hostname === "127.0.0.1" && new URLSearchParams(window.location.search).has("hosted-preview"))));
+  }, []);
+  if (hosted === null) return <div className="workspace-loading">Ouverture de Réplique…</div>;
+  if (hosted) return window.location.pathname === "/app" ? <HostedWorkspace /> : <HostedLanding />;
+  return <App />;
+}
+createRoot(document.getElementById("root")!).render(<Entry />);

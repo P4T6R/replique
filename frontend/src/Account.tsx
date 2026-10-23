@@ -12,6 +12,7 @@ type Props = {
   account: AccountStatus | null;
   onChange: (account: AccountStatus | null) => void;
   disabled?: boolean;
+  startRegistering?: boolean;
 };
 
 const headers = { "Content-Type": "application/json", "X-Replique-Request": "1" };
@@ -34,8 +35,8 @@ async function accountRequest(path: string, body?: object): Promise<AccountStatu
   return path === "logout" ? null : data as AccountStatus;
 }
 
-export function AccountPanel({ account, onChange, disabled = false }: Props) {
-  const [registering, setRegistering] = useState(false);
+export function AccountPanel({ account, onChange, disabled = false, startRegistering = false }: Props) {
+  const [registering, setRegistering] = useState(startRegistering);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [invitation, setInvitation] = useState("");
