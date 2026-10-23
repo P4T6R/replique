@@ -249,10 +249,11 @@
       "must": [
         "Recognize the user already replied after the other person's last message",
         "Admit when the written exchange has no personal topic about the recipient",
-        "Offer distinct conversational moves rather than three questions about current activities",
-        "Use one optional question at most per message"
+        "Offer one short natural follow-up rather than filling three variants",
+        "Use no more than one optional question"
       ],
       "must_not": [
+        "Repeat the already resolved activities question as what occupies you now",
         "Produce three versions of how are you or what's new",
         "Pretend the other person has replied since the user's last message",
         "Assume either person's activities or availability",

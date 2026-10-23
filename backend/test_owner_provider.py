@@ -114,6 +114,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertIn("Proposition générée", response.json()["notice"])
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
         self.assertIn("RÈGLE PRIORITAIRE POUR LE TEXTE HÉBERGÉ", provider.await_args.args[0])
+        self.assertIn("ANTI-RÉPÉTITION PRIORITAIRE", provider.await_args.args[0])
 
     def test_sparse_text_followup_rejects_three_replies_without_charging(self):
         self.provision()
