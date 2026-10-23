@@ -68,6 +68,7 @@ if (mode === "hosted") {
   Object.defineProperty(fileInput, "files", { configurable: true, value: [new window.File(["image"], "capture.png", { type: "image/png" })] });
   fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
   await waitFor(() => document.querySelector(".selected-photo")?.textContent.includes("capture.png"));
+  assert.match(document.querySelector("#conversation")?.placeholder || "", /vocal/);
   assert.equal(calls.filter(call => call.url === "/api/ocr").length, 0);
   assert.ok(document.querySelector(".compose .primary").disabled);
   document.querySelector(".consent input").click();

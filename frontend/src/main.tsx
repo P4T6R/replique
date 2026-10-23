@@ -650,7 +650,11 @@ function App() {
               required={!directPhoto || !selectedPhoto}
               value={conversation}
               onChange={(e) => updateConversation(e.target.value)}
-              placeholder={directPhoto ? "Sinon, collez le dernier message reçu ici. Avec une capture, vous pouvez ajouter une précision facultative." : "Collez votre échange ici…\n\nMoi : Ça m’a fait plaisir de te voir.\nAutre personne : Moi aussi. On remet ça ?"}
+              placeholder={directPhoto
+                ? intent === "relancer"
+                  ? "Facultatif : un sujet à reprendre ou ce que disait un vocal ? Une phrase suffit."
+                  : "Facultatif : précisez le dernier message reçu ou ce que disait un vocal."
+                : "Collez votre échange ici…\n\nMoi : Ça m’a fait plaisir de te voir.\nAutre personne : Moi aussi. On remet ça ?"}
               aria-describedby="context-help"
             />
             {!directPhoto && !!conversation.trim() && <div className="speaker-tools" role="group" aria-label="Attribuer le message sélectionné">

@@ -216,13 +216,15 @@
       "tone": "léger",
       "must": [
         "Recognize the user already replied after the other person's last message",
-        "Prefer a concrete thread from the exchange over another generic check-in",
+        "Admit when the written exchange has no personal topic about the recipient",
+        "Offer distinct conversational moves rather than three questions about current activities",
         "Use one optional question at most per message"
       ],
       "must_not": [
         "Produce three versions of how are you or what's new",
         "Pretend the other person has replied since the user's last message",
-        "Assume either person's activities or availability"
+        "Assume either person's activities or availability",
+        "Use 'your activities' to refer to the recipient when they asked about the user's activities"
       ]
     }
   ]
