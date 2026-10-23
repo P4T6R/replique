@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -155,11 +156,13 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
         vision.assert_awaited_once()
         self.assertIn('QUALITÉ CONVERSATIONNELLE', vision.await_args.args[0])
+        self.assertIn('RELANCE APRÈS UNE RÉPONSE ENVOYÉE', vision.await_args.args[0])
         content = vision.await_args.args[1]
         self.assertEqual(len(content), 2)
         self.assertEqual(content[1]["type"], "input_image")
         self.assertTrue(content[1]["image_url"].startswith("data:image/png;base64,"))
         self.assertEqual(json.loads(content[0]["text"])["note"], "Répondre avec douceur.")
+        self.assertIsInstance(date.fromisoformat(json.loads(content[0]["text"])["current_date_utc"]), date)
 
     def test_direct_image_requires_consent_and_releases_credit_on_uncertainty(self):
         self.provision()
