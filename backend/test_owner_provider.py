@@ -25,6 +25,7 @@ from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER, image_bytes, heic_by
 
 ORIGIN = "https://replique.duckdns.org"
 HEADERS = {"Origin": ORIGIN, "X-Replique-Request": "1"}
+HOSTED_TEXT_ANSWER = {**PROVIDER_ANSWER, "sparse_followup": False}
 
 
 class OwnerProviderTests(unittest.TestCase):
@@ -82,7 +83,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(self.generate().status_code, 401)
         self.register()
         with patch("backend.owner_provider.stream_text", new_callable=AsyncMock,
-                   return_value=json.dumps(PROVIDER_ANSWER)) as stream:
+                   return_value=json.dumps(HOSTED_TEXT_ANSWER)) as stream:
             response = self.generate()
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["mode"], "hosted")
@@ -95,6 +96,35 @@ class OwnerProviderTests(unittest.TestCase):
             self.assertEqual(self.generate().status_code, 503)
         self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
         self.assertEqual(report(1)["outcomes"], {"success": 1, "quota": 1})
+
+    def test_sparse_text_followup_returns_one_reply_and_one_credit(self):
+        self.provision()
+        self.register()
+        answer = {"sparse_followup": True,
+                  "insight": "Les nouvelles ont déjà été échangées ; aucun autre sujet concret n'est visible.",
+                  "replies": [{"title": "Simple", "text": "Quoi de neuf depuis la dernière fois ?",
+                               "why": "Une ouverture courte, sans supposer ses activités."}]}
+        payload = {**BASE_REQUEST, "conversation": "Autre personne : Ça va merci.\nMoi : Tant mieux !",
+                   "intent": "relancer", "consent": True}
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps(answer)) as provider:
+            response = self.client.post("/api/generate", headers=HEADERS, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["replies"]), 1)
+        self.assertIn("Proposition générée", response.json()["notice"])
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 19)
+        self.assertIn("RÈGLE PRIORITAIRE POUR LE TEXTE HÉBERGÉ", provider.await_args.args[0])
+
+    def test_sparse_text_followup_rejects_three_replies_without_charging(self):
+        self.provision()
+        self.register()
+        answer = {**PROVIDER_ANSWER, "sparse_followup": True}
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps(answer)):
+            response = self.client.post("/api/generate", headers=HEADERS,
+                                        json={**BASE_REQUEST, "intent": "relancer", "consent": True})
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(self.client.get("/api/account/status").json()["trial_remaining"], 20)
 
     def test_server_model_must_be_selected_before_opening(self):
         self.provision()
@@ -236,7 +266,7 @@ class OwnerProviderTests(unittest.TestCase):
         self.register()
         payload = {**BASE_REQUEST, "conversation": "Tu viens samedi ?", "consent": True, "context_confirmed": True}
         with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
-                   return_value=json.dumps(PROVIDER_ANSWER)) as provider:
+                   return_value=json.dumps(HOSTED_TEXT_ANSWER)) as provider:
             response = self.client.post("/api/generate", headers=HEADERS, json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         sent = json.loads(provider.await_args.args[1])
@@ -280,7 +310,7 @@ class OwnerProviderTests(unittest.TestCase):
         payload = {**BASE_REQUEST, "intent": "répondre naturellement", "consent": False,
                    "use_memory": True, "memory_revision": preview["revision"]}
         with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
-                   return_value=json.dumps(PROVIDER_ANSWER)) as provider:
+                   return_value=json.dumps(HOSTED_TEXT_ANSWER)) as provider:
             self.assertEqual(self.client.post("/api/generate", headers=HEADERS, json=payload).status_code, 403)
             provider.assert_not_called()
             payload["consent"] = True
@@ -318,7 +348,7 @@ class OwnerProviderTests(unittest.TestCase):
                 self.assertEqual(payload["model"], "owner-model")
                 self.assertFalse(payload["store"])
                 body = ("data: " + json.dumps({"type": "response.output_text.delta",
-                    "delta": json.dumps(PROVIDER_ANSWER)}) + "\n\n"
+                    "delta": json.dumps(HOSTED_TEXT_ANSWER)}) + "\n\n"
                     + "data: " + json.dumps({"type": "response.completed",
                     "response": {"status": "completed"}}) + "\n\n")
                 return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)

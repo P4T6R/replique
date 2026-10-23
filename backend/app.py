@@ -183,11 +183,15 @@ class ProviderAnswer(BaseModel):
     replies: list[ProviderReply] = Field(min_length=3, max_length=3)
 
 
-class PhotoProviderAnswer(ProviderAnswer):
+class FlexibleProviderAnswer(ProviderAnswer):
     replies: list[ProviderReply] = Field(min_length=1, max_length=3)
 
 
-class ImageProviderAnswer(PhotoProviderAnswer):
+class HostedTextProviderAnswer(FlexibleProviderAnswer):
+    sparse_followup: bool
+
+
+class ImageProviderAnswer(FlexibleProviderAnswer):
     context_clear: bool
     sparse_followup: bool
 
@@ -496,6 +500,7 @@ Une question de suivi vaut surtout si elle reprend un détail que l'autre a effe
 Si l'autre partage une émotion ou un fait personnel, accueille ce qu'il ou elle a vraiment dit avec la même intensité, sans diagnostic ni intimité inventée. Une confidence réciproque peut rendre l'échange plus vivant seulement si l'utilisateur a fourni son propre fait ou ressenti ; n'invente pas son histoire, ses goûts ou ses sentiments. Ne présume ni intérêt amoureux ni comportement commun à « toutes les filles » : adapte-toi à cette personne et à cet échange.
 Le ton taquin autorise un trait d'esprit bref uniquement quand un détail de la conversation et son registre le permettent. Si l'autre a plaisanté ou flirté, une réponse légèrement joueuse peut convenir ; sinon reste chaleureux et naturel. Pas de phrase de drague préfabriquée, compliment physique gratuit, défi, jalousie provoquée, sous-entendu sexuel ou moquerie qui rabaisse. N'affirme jamais qu'un message fera naître l'attirance ou obtiendra une réponse.
 Pour proposer de se voir, formule une seule invitation claire et facile à refuser, ancrée dans un intérêt ou un moment réellement partagé si possible. N'annonce pas un rendez-vous acquis. Si l'autre a décliné ou demandé de l'espace, respecte exactement sa limite ; ne cherche pas de technique pour la contourner. Avant de rendre le JSON, relis chaque texte : cible actuelle traitée, aucun fait inventé, aucun message déjà envoyé répété, registre naturel, pression absente et variantes réellement différentes.
+Quand l'autre écarte un jour et propose « dimanche peut-être », dimanche n'est qu'une possibilité. Si l'activité mentionnée était liée au jour écarté, ne la déplace pas automatiquement à dimanche et n'invente pas une balade, un café ou une autre activité. Demande simplement si se voir dimanche lui conviendrait, sans transformer cette possibilité en rendez-vous confirmé.
 """
 
 HOSTED_FOLLOWUP_PROMPT = """
@@ -511,6 +516,11 @@ PRIORITÉ DES LIMITES : toutes ces consignes de relance cessent de s'appliquer s
 SPARSE_PHOTO_FOLLOWUP_PROMPT = """
 RÈGLE PRIORITAIRE POUR UNE CAPTURE ET intent=relancer : décide d'abord si la capture contient un sujet concret et encore ouvert venant de l'autre personne. De simples salutations, des nouvelles déjà échangées, une question « et tes activités ? » déjà traitée par Moi, un prénom dans note, des dates et un vocal non transcrit ne sont PAS un sujet concret. Dans ce cas, mets sparse_followup à true et retourne UNE seule reply intitulée Simple. Écris une relance courte, naturelle et prête à envoyer, qui ouvre la conversation sans répéter « ça va », sans évoquer le silence, sans supposer ce que fait l'autre, sans invitation prématurée et sans question à rallonge. Préfère une formule ordinaire que l'utilisateur pourrait vraiment envoyer ; une seule question légère suffit si elle sonne juste. Le prénom et l'emoji sont facultatifs même si la note les autorise : ne les insère que s'ils améliorent réellement le message. tone=léger ne force ni blague ni flirt en l'absence d'appui dans l'échange. Dans insight, dis brièvement que les nouvelles ont déjà été échangées et qu'aucun autre fil concret n'est visible ; ne prétends pas connaître le contenu d'un vocal.
 Si un sujet concret encore ouvert existe, mets sparse_followup à false et conserve les trois variantes habituelles. Pour une autre intention, sparse_followup vaut false et il faut trois variantes. En cas de refus de contact ou d'abstention justifiée, sparse_followup vaut false et les trois textes sont vides. Cette règle prime sur toute consigne précédente imposant trois variantes. Le JSON contient toujours context_clear, sparse_followup, insight et replies.
+"""
+
+
+SPARSE_TEXT_FOLLOWUP_PROMPT = """
+RÈGLE PRIORITAIRE POUR LE TEXTE HÉBERGÉ : le JSON contient sparse_followup, insight et replies. Si intent=relancer et que les derniers échanges ne donnent aucun sujet concret encore ouvert venant de l'autre personne, mets sparse_followup à true et écris UNE seule reply intitulée Simple. Des salutations, « ça va », « quoi de neuf » ou une question sur les activités de Moi déjà traitée ne constituent pas un sujet concret. Une formule naturelle et courte suffit ; ne remplis pas trois variantes avec une question générale, une salutation artificielle et une invitation à reparler. Dans insight, indique sobrement ce qui a déjà été répondu et ce qui manque. Si un sujet concret existe ou si l'intention est différente, mets sparse_followup à false et conserve trois replies. Pour un refus de contact ou une abstention justifiée, mets sparse_followup à false et rends trois textes vides. Cette règle prime sur les consignes précédentes imposant trois variantes.
 """
 
 
@@ -546,21 +556,22 @@ def generation_data(request: GenerateRequest, memory_context: dict | None = None
 
 
 def validate_answer(content: str, request: GenerateRequest | ImageGenerateRequest,
-                    *, sparse_followup: bool = False) -> ProviderAnswer | PhotoProviderAnswer:
+                    *, sparse_followup: bool = False, hosted_text: bool = False) -> ProviderAnswer | FlexibleProviderAnswer:
     is_photo = isinstance(request, ImageGenerateRequest)
-    answer = (PhotoProviderAnswer if is_photo else ProviderAnswer).model_validate_json(content)
+    flexible = is_photo or hosted_text
+    answer = (FlexibleProviderAnswer if flexible else ProviderAnswer).model_validate_json(content)
     titles = [reply.title for reply in answer.replies]
     if titles not in (["Simple"], ["Simple", "Plus chaleureuse", "Plus directe"]):
         raise ValueError("invalid titles")
-    if len(titles) == 1 and not (is_photo and request.intent == "relancer" and sparse_followup):
-        raise ValueError("single reply requires a sparse photo follow-up")
+    if len(titles) == 1 and not (flexible and request.intent == "relancer" and sparse_followup):
+        raise ValueError("single reply requires a sparse hosted follow-up")
     # Consistent abstention remains valid for unsafe or insufficient context.
     # The prompt distinguishes ordinary silence from an explicit refusal.
     abstain = all(not reply.text.strip() for reply in answer.replies)
     if len(titles) == 1 and abstain:
         raise ValueError("abstention requires three empty replies")
-    if sparse_followup and is_photo and request.intent == "relancer" and not abstain and len(titles) != 1:
-        raise ValueError("sparse photo follow-up requires one reply")
+    if sparse_followup and flexible and request.intent == "relancer" and not abstain and len(titles) != 1:
+        raise ValueError("sparse hosted follow-up requires one reply")
     if not abstain and len({re.sub(r"[\W_]+", "", fold(reply.text)) for reply in answer.replies}) != len(titles):
         raise ValueError("duplicate replies")
     if any((not abstain and not reply.text.strip()) or not reply.why.strip() for reply in answer.replies):
@@ -696,12 +707,17 @@ async def generate(request: GenerateRequest, http_request: Request):
             if config.mode == "owner_chatgpt":
                 if not request.consent:
                     raise HTTPException(403, "Confirmez l’envoi de cette conversation à OpenAI avant de générer.")
-                content = await owner_generate_text(SYSTEM_PROMPT + HOSTED_QUALITY_PROMPT + GROUNDED_CONNECTION_PROMPT + HOSTED_FOLLOWUP_PROMPT + "\nJSON attendu : " + json.dumps(ProviderAnswer.model_json_schema()), generation_data(request, memory_context))
+                content = await owner_generate_text(SYSTEM_PROMPT + HOSTED_QUALITY_PROMPT + GROUNDED_CONNECTION_PROMPT + HOSTED_FOLLOWUP_PROMPT + SPARSE_TEXT_FOLLOWUP_PROMPT + "\nJSON attendu : " + json.dumps(HostedTextProviderAnswer.model_json_schema()), generation_data(request, memory_context))
                 try:
-                    answer = validate_answer(content, request)
+                    hosted_answer = HostedTextProviderAnswer.model_validate_json(content)
+                    answer = validate_answer(hosted_answer.model_dump_json(exclude={"sparse_followup"}),
+                                             request, sparse_followup=hosted_answer.sparse_followup,
+                                             hosted_text=True)
                 except (ValueError, KeyError, TypeError, ValidationError):
                     raise HTTPException(502, "La réponse du service n’a pas le format attendu. Aucun crédit n’a été consommé.") from None
-                result = GenerateResponse(mode="hosted", notice="Propositions générées par Réplique. Vérifiez les faits avant de copier.",
+                notice = ("Proposition générée par Réplique. Vérifiez les faits avant de copier." if len(answer.replies) == 1
+                          else "Propositions générées par Réplique. Vérifiez les faits avant de copier.")
+                result = GenerateResponse(mode="hosted", notice=notice,
                     insight=answer.insight, boundary=False, replies=[Reply(id=str(i + 1), title=reply.title, text=reply.text, why=reply.why) for i, reply in enumerate(answer.replies)])
             else:
                 result = await live_answer(request, config, memory_context)
