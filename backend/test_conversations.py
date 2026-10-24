@@ -95,6 +95,20 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(corrected.json()["messages"][0]["body"], "Coucou, tu fais quoi ce soir ?")
         self.assertEqual(self.other.get("/api/conversations").json()["conversations"], [])
 
+    def test_workspace_generation_receives_polite_close_guidance(self):
+        conversation = self.create()
+        url = f"/api/conversations/{conversation['id']}"
+        added = self.client.post(url + "/import-text", headers=HEADERS, json={"revision": 0, "messages": [
+            {"sender": "me", "body": "On en reparle bientôt ?"},
+            {"sender": "other", "body": "On verra ça prochainement. Bonne journée à toi !"}]})
+        self.assertEqual(added.status_code, 200, added.text)
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   return_value=json.dumps({**PROVIDER_ANSWER, "sparse_followup": False})) as provider:
+            generated = self.client.post(url + "/generate", headers=HEADERS)
+        self.assertEqual(generated.status_code, 200, generated.text)
+        self.assertIn("CLÔTURE ET FUTUR INCERTAIN", provider.await_args.args[0])
+        self.assertIn("On verra ça prochainement. Bonne journée à toi !", provider.await_args.args[1])
+
     def test_text_import_deduplicates_overlapping_history(self):
         conversation = self.create()
         url = f"/api/conversations/{conversation['id']}"

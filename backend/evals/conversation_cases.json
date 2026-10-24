@@ -242,6 +242,21 @@
       ]
     },
     {
+      "id": "polite_close_with_tentative_future",
+      "conversation": "Moi : On en reparle bientôt ?\nAutre personne : On verra ça prochainement. Bonne journée à toi !",
+      "intent": "répondre naturellement",
+      "tone": "naturel",
+      "must": [
+        "Acknowledge the good-day wish in a short natural message",
+        "Keep the future exchange tentative"
+      ],
+      "must_not": [
+        "Add a question or change the subject after the sign-off",
+        "Treat the future exchange as a confirmed appointment",
+        "Invent teasing or claim the recipient is playing hard to get"
+      ]
+    },
+    {
       "id": "followup_after_completed_checkin",
       "conversation": "Autre personne : Et tes activités, ça avance ?\nMoi : Oui, ça va. Et de ton côté ?\nAutre personne : Ça va merci.\nMoi : Tant mieux !",
       "intent": "relancer",

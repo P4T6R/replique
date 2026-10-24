@@ -6,7 +6,7 @@ from datetime import date
 from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from backend.app import (app, GenerateRequest, SYSTEM_PROMPT, HOSTED_QUALITY_PROMPT, GROUNDED_CONNECTION_PROMPT, HOSTED_FOLLOWUP_PROMPT, SPARSE_TEXT_FOLLOWUP_PROMPT, SPARSE_ANTI_REPEAT_PROMPT, IMAGE_SYSTEM_PROMPT, DEMO_BRIEF,
+from backend.app import (app, GenerateRequest, SYSTEM_PROMPT, HOSTED_QUALITY_PROMPT, GROUNDED_CONNECTION_PROMPT, HOSTED_FOLLOWUP_PROMPT, SPARSE_TEXT_FOLLOWUP_PROMPT, SPARSE_ANTI_REPEAT_PROMPT, CLOSING_REPLY_PROMPT, IMAGE_SYSTEM_PROMPT, DEMO_BRIEF,
                          DEMO_UNANSWERED, generation_data, boundary_kind, validate_answer)
 from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER
 
@@ -146,6 +146,13 @@ class ConversationQualityTests(unittest.TestCase):
         self.assertIn('Même si Moi a ensuite envoyé un message, conserve trois textes vides', HOSTED_FOLLOWUP_PROMPT)
         self.assertIn(HOSTED_FOLLOWUP_PROMPT, IMAGE_SYSTEM_PROMPT)
         self.assertNotIn('trois variantes d’une seule idée facultative', SYSTEM_PROMPT)
+
+    def test_hosted_reply_respects_a_polite_close_and_tentative_future(self):
+        self.assertIn(CLOSING_REPLY_PROMPT, IMAGE_SYSTEM_PROMPT)
+        for instruction in ('clôt ce tour de conversation', "n'ajoute aucune question",
+                            'ne sont ni un rendez-vous confirmé', "N'invente pas une taquinerie",
+                            'même si tone=léger'):
+            self.assertIn(instruction, CLOSING_REPLY_PROMPT)
 
     def test_variants_differing_only_in_punctuation_are_rejected(self):
         answer = json.loads(json.dumps(PROVIDER_ANSWER))
