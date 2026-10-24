@@ -86,3 +86,56 @@ assert.equal(window.document.querySelectorAll(".suggestion-card").length, 3);
 assert.equal(calls.filter(call => call.url === "/api/conversations/one/generate").length, 2);
 console.log("PASS hosted landing and persistent conversation: import, three suggestions, explicit sent message, next received reply.");
 window.close();
+
+const imageDom = new JSDOM('<div id="root"></div>', { url: "https://replique.duckdns.org/app", runScripts: "outside-only", pretendToBeVisual: true });
+const imageWindow = imageDom.window;
+const imageDocument = imageWindow.document;
+let imageConversation = { id: "image-one", title: "Capture test", intent: "répondre naturellement", tone: "naturel", style: "", revision: 0, updated_at: 1, messages: [], suggestions: null };
+let importAttempts = 0;
+let completeImport;
+let completeGeneration;
+imageWindow.fetch = async (url, options = {}) => {
+  const path = String(url);
+  if (path === "/api/health") return { ok: true, json: async () => ({ mode: "hosted" }) };
+  if (path === "/api/account/status") return { ok: true, json: async () => account };
+  if (path === "/api/conversations") return { ok: true, json: async () => ({ conversations: [{ id: "image-one", title: imageConversation.title, updated_at: 1 }] }) };
+  if (path === "/api/conversations/image-one" && (!options.method || options.method === "GET")) return { ok: true, json: async () => structuredClone(imageConversation) };
+  if (path === "/api/conversations/image-one/import-image") {
+    importAttempts++;
+    if (importAttempts === 1) return new Promise(resolve => { completeImport = resolve; });
+    imageConversation = { ...imageConversation, revision: 1, messages: [
+      { id: "image-message-1", sender: "me", body: "Salut", created_at: 1 },
+      { id: "image-message-2", sender: "other", body: "Coucou", created_at: 2 },
+    ] };
+    return { ok: true, json: async () => ({ added: 2, conversation: structuredClone(imageConversation) }) };
+  }
+  if (path === "/api/conversations/image-one/generate") return new Promise(resolve => { completeGeneration = resolve; });
+  throw new Error(`Unexpected hosted image request: ${path}`);
+};
+imageWindow.eval(bundle);
+await waitFor(() => imageDocument.querySelector(".conversation-link"));
+imageDocument.querySelector(".conversation-link").click();
+await waitFor(() => imageDocument.querySelector('.composer-tools input[type="file"]'));
+const imageInput = imageDocument.querySelector('.composer-tools input[type="file"]');
+Object.defineProperty(imageInput, "files", { configurable: true, value: [new imageWindow.File(["synthetic"], "capture.png", { type: "image/png" })] });
+imageInput.dispatchEvent(new imageWindow.Event("change", { bubbles: true }));
+await waitFor(() => imageDocument.querySelector(".chat-processing"));
+assert.match(imageDocument.querySelector(".chat-processing").textContent, /Lecture de votre capture en cours/);
+assert.match(imageDocument.querySelector(".coach-progress").textContent, /Je lis votre capture/);
+completeImport({ ok: false, status: 503, json: async () => ({ detail: "Service momentanément indisponible." }) });
+await waitFor(() => imageDocument.querySelector(".chat-feedback"));
+assert.match(imageDocument.querySelector(".chat-feedback").textContent, /Réessayer cette capture/);
+assert.equal(imageDocument.querySelector(".chat-processing"), null);
+[...imageDocument.querySelectorAll(".chat-feedback button")].find(button => button.textContent.includes("Saisir son message")).click();
+assert.equal(imageDocument.activeElement, imageDocument.querySelector(".composer-row textarea"));
+[...imageDocument.querySelectorAll(".chat-feedback button")].find(button => button.textContent.includes("Réessayer cette capture")).click();
+await waitFor(() => importAttempts === 2 && imageDocument.querySelector(".chat-processing")?.textContent.includes("Préparation de vos réponses"));
+assert.match(imageDocument.querySelector(".coach-progress").textContent, /Je prépare vos réponses/);
+const imageSuggestions = { insight: "Coucou est le dernier message.", boundary: false,
+  replies: ["Simple", "Chaleureuse", "Directe"].map((title, index) => ({ id: String(index + 1), title, text: `Réponse ${index + 1}`, why: "Suit le fil." })) };
+imageConversation = { ...imageConversation, suggestions: imageSuggestions };
+completeGeneration({ ok: true, status: 200, json: async () => imageSuggestions });
+await waitFor(() => imageDocument.querySelectorAll(".suggestion-card").length === 3);
+assert.equal(imageDocument.querySelector(".chat-feedback"), null);
+console.log("PASS hosted image progress, persistent error actions, retry and answer generation.");
+imageWindow.close();

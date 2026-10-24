@@ -54,15 +54,28 @@ export function HostedWorkspace() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [failedImage, setFailedImage] = useState<File | null>(null);
+  const [failedGeneration, setFailedGeneration] = useState(false);
+  const [imageName, setImageName] = useState("");
+  const [generationFromImage, setGenerationFromImage] = useState(false);
+  const [processingSeconds, setProcessingSeconds] = useState(0);
   const [settings, setSettings] = useState({ title: "", intent: "répondre naturellement", tone: "naturel", style: "" });
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [editingMessage, setEditingMessage] = useState<{ id: string; sender: "me" | "other"; body: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { api<AccountStatus>("/api/account/status").then(setAccount).catch(() => setAccount(null)).finally(() => setLoading(false)); }, []);
   useEffect(() => { if (account) void refreshList(); else { setItems([]); setActive(null); } }, [account?.email]);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [active?.messages.length]);
+  useEffect(() => { if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight; }, [active?.messages.length, busy]);
+  useEffect(() => {
+    if (busy !== "image" && busy !== "generate") { setProcessingSeconds(0); return; }
+    setProcessingSeconds(0);
+    const started = Date.now();
+    const timer = window.setInterval(() => setProcessingSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   async function refreshList() {
     try { const data = await api<{ conversations: Summary[] }>("/api/conversations"); setItems(data.conversations); }
@@ -72,6 +85,7 @@ export function HostedWorkspace() {
     setActive(conversation); setSettings({ title: conversation.title, intent: conversation.intent, tone: conversation.tone, style: conversation.style });
     setEdits(Object.fromEntries((conversation.suggestions?.replies || []).map(reply => [reply.id, reply.text])));
     setDraft(""); setPaste(""); setEditingMessage(null); setError(""); setNotice("");
+    setFailedImage(null); setFailedGeneration(false);
   }
   async function choose(id: string) {
     if (busy) return;
@@ -95,18 +109,25 @@ export function HostedWorkspace() {
     finally { setBusy(""); }
   }
   async function generate(conversation: Conversation, afterImageImport = false) {
-    setBusy("generate"); setError(""); setNotice("");
+    setBusy("generate"); setError(""); setNotice(""); setGenerationFromImage(afterImageImport); setFailedGeneration(false);
     try {
       const result = await api<Suggestions>(`/api/conversations/${conversation.id}/generate`, { method: "POST", headers: jsonHeaders });
-      const latest = await api<Conversation>(`/api/conversations/${conversation.id}`);
-      show({ ...latest, suggestions: result });
-      const status = await api<AccountStatus>("/api/account/status"); setAccount(status);
-      await refreshList();
+      setActive(current => current?.id === conversation.id ? { ...current, suggestions: result } : current);
+      setEdits(Object.fromEntries(result.replies.map(reply => [reply.id, reply.text])));
+      try {
+        const latest = await api<Conversation>(`/api/conversations/${conversation.id}`);
+        show({ ...latest, suggestions: result });
+        const status = await api<AccountStatus>("/api/account/status"); setAccount(status);
+        await refreshList();
+      } catch {
+        setNotice("Les réponses sont prêtes. Certaines informations n’ont pas pu être actualisées ; vous pouvez continuer à les utiliser.");
+      }
     } catch (reason) {
       const message = (reason as Error).message;
       setError(afterImageImport ? `La capture est enregistrée dans cette conversation. Les réponses n’ont pas pu être générées : ${message} Cliquez sur « Trouver des réponses » pour réessayer.` : message);
+      setFailedGeneration(true);
     }
-    finally { setBusy(""); }
+    finally { setBusy(""); setGenerationFromImage(false); }
   }
   async function addMessage(body = draft, who = sender, thenGenerate = true) {
     if (!active || !body.trim() || busy) return;
@@ -132,15 +153,22 @@ export function HostedWorkspace() {
   }
   async function importImage(file?: File) {
     if (!active || !file || busy) return;
-    setBusy("import"); setError(""); setNotice("");
+    setBusy("image"); setError(""); setNotice(""); setFailedImage(null); setFailedGeneration(false); setImageName(file.name);
     const body = new FormData(); body.append("file", file);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 150_000);
     try {
-      const data = await api<{ added: number; conversation: Conversation }>(`/api/conversations/${active.id}/import-image`, { method: "POST", headers: { "X-Replique-Request": "1" }, body });
+      const data = await api<{ added: number; conversation: Conversation }>(`/api/conversations/${active.id}/import-image`, { method: "POST", headers: { "X-Replique-Request": "1" }, body, signal: controller.signal });
       show(data.conversation); await refreshList();
       if (data.added) await generate(data.conversation, true);
       else { setNotice("Cette capture n’ajoute aucun nouveau message."); setBusy(""); }
-    } catch (reason) { setError((reason as Error).message); setBusy(""); }
-    finally { if (fileRef.current) fileRef.current.value = ""; }
+    } catch (reason) {
+      setFailedImage(file);
+      const detail = controller.signal.aborted ? "La lecture a pris trop de temps." : (reason as Error).message;
+      setError(`La capture n’a pas pu être analysée : ${detail} Réessayez cette capture ou saisissez le dernier message reçu.`);
+      setBusy("");
+    }
+    finally { window.clearTimeout(timeout); setImageName(""); if (fileRef.current) fileRef.current.value = ""; }
   }
   async function remove() {
     if (!active || busy || !window.confirm(`Supprimer définitivement « ${active.title} » et ses messages ?`)) return;
@@ -167,10 +195,11 @@ export function HostedWorkspace() {
     {loading ? <main className="workspace-loading">Ouverture de votre espace…</main> : !account ? <main className="hosted-auth"><div><span className="landing-kicker">VOTRE ESPACE RÉPLIQUE</span><h1>Retrouvez le fil de vos conversations.</h1><p>Connectez-vous pour reprendre un échange, importer une capture ou trouver la suite.</p></div><AccountPanel account={null} onChange={setAccount} startRegistering={new URLSearchParams(window.location.search).has("register")} /></main> :
       <main className="conversation-layout"><aside className="conversation-sidebar"><div className="sidebar-heading"><span className="landing-kicker">VOTRE ESPACE</span><h1>Conversations</h1></div><button className="new-conversation" onClick={() => void create()} disabled={!!busy}>＋ Nouvelle conversation</button><nav aria-label="Vos conversations">{items.map(item => <button key={item.id} className={item.id === active?.id ? "conversation-link active" : "conversation-link"} onClick={() => void choose(item.id)}><span className="conversation-initial">{item.title.slice(0, 1).toUpperCase()}</span><span><strong>{item.title}</strong><small>{new Date(item.updated_at * 1000).toLocaleDateString("fr-FR")}</small></span></button>)}</nav><div className="sidebar-bottom"><span>{account.email}</span><button onClick={async () => { await api("/api/account/logout", { method: "POST", headers: jsonHeaders }); setAccount(null); }}>Se déconnecter</button></div></aside>
         <section className="chat-panel">{active ? <><div className="chat-header"><div className="chat-avatar">{active.title.slice(0, 1).toUpperCase()}</div><div><h2>{active.title}</h2><span>Réplique garde le contexte de cet échange</span></div><button className="chat-settings-button" onClick={() => void remove()} disabled={!!busy} title="Supprimer cette conversation">Supprimer</button></div>
-          <div className="chat-scroll"><div className="chat-intro">Les messages que vous ajoutez restent dans cette conversation. Les propositions ne sont jamais envoyées automatiquement.</div>{active.messages.map(message => <div key={message.id} className={`chat-row ${message.sender === "me" ? "mine" : "theirs"}`}><div className="chat-bubble">{editingMessage?.id === message.id ? <div className="bubble-edit"><select aria-label="Auteur du message" value={editingMessage.sender} onChange={event => setEditingMessage({ ...editingMessage, sender: event.target.value as "me" | "other" })}><option value="other">Message reçu</option><option value="me">Mon message</option></select><textarea aria-label="Corriger le message" value={editingMessage.body} maxLength={2000} rows={3} onChange={event => setEditingMessage({ ...editingMessage, body: event.target.value })}/><div><button onClick={() => void correctMessage()} disabled={!!busy || !editingMessage.body.trim()}>Enregistrer</button><button onClick={() => setEditingMessage(null)}>Annuler</button><button onClick={() => void correctMessage(true)} disabled={!!busy}>Retirer</button></div></div> : <>{message.body}<button className="bubble-correct" onClick={() => setEditingMessage({ id: message.id, sender: message.sender, body: message.body })}>Corriger</button></>}</div></div>)}<div ref={bottomRef}/></div>
-          <div className="composer"><div className="sender-switch" role="group" aria-label="Auteur du message"><button className={sender === "other" ? "selected" : ""} onClick={() => setSender("other")}>Message reçu</button><button className={sender === "me" ? "selected" : ""} onClick={() => setSender("me")}>Mon message</button></div><div className="composer-row"><textarea aria-label={sender === "other" ? "Nouvelle réponse reçue" : "Message que j'ai envoyé"} placeholder={sender === "other" ? "Elle a répondu… Écrivez son message ici." : "Ce que vous avez réellement envoyé…"} value={draft} onChange={event => setDraft(event.target.value)} maxLength={2000} rows={2}/><button onClick={() => void addMessage()} disabled={!draft.trim() || !!busy}>{busy === "message" || busy === "generate" ? "Analyse…" : sender === "other" ? "Ajouter et répondre ↗" : "Ajouter ↗"}</button></div><div className="composer-tools"><input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" className="sr-only" onChange={event => void importImage(event.target.files?.[0])}/><button onClick={() => fileRef.current?.click()} disabled={!!busy}>＋ Ajouter une capture</button><span>Une idée copiée n’est ajoutée à l’échange que si vous confirmez l’avoir envoyée.</span></div></div>
+          <div className="chat-scroll" ref={chatScrollRef}><div className="chat-intro">Les messages que vous ajoutez restent dans cette conversation. Les propositions ne sont jamais envoyées automatiquement.</div>{active.messages.map(message => <div key={message.id} className={`chat-row ${message.sender === "me" ? "mine" : "theirs"}`}><div className="chat-bubble">{editingMessage?.id === message.id ? <div className="bubble-edit"><select aria-label="Auteur du message" value={editingMessage.sender} onChange={event => setEditingMessage({ ...editingMessage, sender: event.target.value as "me" | "other" })}><option value="other">Message reçu</option><option value="me">Mon message</option></select><textarea aria-label="Corriger le message" value={editingMessage.body} maxLength={2000} rows={3} onChange={event => setEditingMessage({ ...editingMessage, body: event.target.value })}/><div><button onClick={() => void correctMessage()} disabled={!!busy || !editingMessage.body.trim()}>Enregistrer</button><button onClick={() => setEditingMessage(null)}>Annuler</button><button onClick={() => void correctMessage(true)} disabled={!!busy}>Retirer</button></div></div> : <>{message.body}<button className="bubble-correct" onClick={() => setEditingMessage({ id: message.id, sender: message.sender, body: message.body })}>Corriger</button></>}</div></div>)}{(busy === "image" || busy === "generate") && <div className="chat-processing" role="status" aria-live="polite"><span className="chat-processing-icon" aria-hidden="true"><i/><i/><i/></span><div><strong>{busy === "image" ? "Lecture de votre capture en cours…" : "Préparation de vos réponses en cours…"}</strong><p>{busy === "image" ? `Réplique analyse les messages de « ${imageName} ». Vous pouvez patienter ici.` : generationFromImage ? "La capture est lue. Réplique prépare maintenant des réponses adaptées à cet échange." : "Réplique relit la conversation et prépare vos réponses."}</p>{processingSeconds >= 20 && <small>Le traitement prend plus de temps que prévu. Gardez cette page ouverte ; aucune autre action n’est nécessaire.</small>}</div></div>}</div>
+          {error && <div className="chat-feedback error" role="alert"><p>{error}</p><div className="chat-feedback-actions">{failedImage && <button onClick={() => void importImage(failedImage)} disabled={!!busy}>Réessayer cette capture</button>}{failedGeneration && active.messages.length > 0 && <button onClick={() => void generate(active)} disabled={!!busy}>Réessayer les réponses</button>}{failedImage && <button onClick={() => { setSender("other"); messageInputRef.current?.focus(); }}>Saisir son message</button>}<button className="quiet" onClick={() => { setError(""); setFailedImage(null); setFailedGeneration(false); }}>Fermer</button></div></div>}<div className="composer"><div className="sender-switch" role="group" aria-label="Auteur du message"><button className={sender === "other" ? "selected" : ""} onClick={() => setSender("other")}>Message reçu</button><button className={sender === "me" ? "selected" : ""} onClick={() => setSender("me")}>Mon message</button></div><div className="composer-row"><textarea ref={messageInputRef} aria-label={sender === "other" ? "Nouvelle réponse reçue" : "Message que j'ai envoyé"} placeholder={sender === "other" ? "Elle a répondu… Écrivez son message ici." : "Ce que vous avez réellement envoyé…"} value={draft} onChange={event => setDraft(event.target.value)} maxLength={2000} rows={2}/><button onClick={() => void addMessage()} disabled={!draft.trim() || !!busy}>{busy === "message" || busy === "generate" ? "Analyse…" : sender === "other" ? "Ajouter et répondre ↗" : "Ajouter ↗"}</button></div><div className="composer-tools"><input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" className="sr-only" onChange={event => void importImage(event.target.files?.[0])}/><button onClick={() => fileRef.current?.click()} disabled={!!busy}>＋ Ajouter une capture</button><span>Une idée copiée n’est ajoutée à l’échange que si vous confirmez l’avoir envoyée.</span></div></div>
         </> : <div className="chat-start"><div className="chat-start-icon">✳</div><span className="landing-kicker">CHAQUE ÉCHANGE A SA SUITE</span><h2>Reprenez une conversation.<br/><em>À votre façon.</em></h2><p>Créez un échange, ajoutez une capture ou les messages en texte, puis découvrez vos réponses.</p><button className="landing-primary" onClick={() => void create()} disabled={!!busy}>Créer une conversation ↗</button></div>}</section>
         <aside className="coach-panel">{active ? <><div className="coach-heading"><span className="landing-kicker">L’ATELIER</span><h2>Trouvons les mots.</h2><p>Le dernier message et l’ensemble de l’échange guident les propositions.</p></div><details className="coach-settings"><summary>Objectif et style <span>＋</span></summary><div className="coach-settings-body"><label>Nom de l’échange<input value={settings.title} maxLength={80} onChange={event => setSettings({ ...settings, title: event.target.value })}/></label><label>Je veux…<select value={settings.intent} onChange={event => setSettings({ ...settings, intent: event.target.value })}><option>répondre naturellement</option><option>relancer</option><option>proposer de se voir</option><option>clarifier</option><option>poser une limite</option><option>décliner</option></select></label><label>Ton<select value={settings.tone} onChange={event => setSettings({ ...settings, tone: event.target.value })}><option value="naturel">Naturel</option><option value="chaleureux">Chaleureux</option><option value="léger">Taquin et léger</option><option value="direct">Direct</option></select></label><label>Votre façon d’écrire (facultatif)<textarea value={settings.style} maxLength={500} rows={2} onChange={event => setSettings({ ...settings, style: event.target.value })} placeholder="Ex. phrases courtes, pas de surnoms…"/></label><button onClick={() => void saveSettings()} disabled={!!busy || !settings.title.trim()}>Enregistrer</button></div></details>
+          {(busy === "image" || busy === "generate") && <div className="coach-progress"><span>TRAITEMENT EN COURS</span><strong>{busy === "image" ? "Je lis votre capture…" : "Je prépare vos réponses…"}</strong><p>{processingSeconds >= 20 ? "Cela prend un peu plus de temps. Vos messages restent ici." : busy === "image" ? "Les messages vont apparaître dans la conversation." : "Les propositions apparaîtront ici dès qu’elles seront prêtes."}</p></div>}
           {!active.messages.length && <div className="coach-first"><strong>Commencez avec une capture</strong><p>Utilisez « Ajouter une capture » sous la conversation, ou collez un échange en texte ci-dessous.</p></div>}
           <details className="coach-import"><summary>Coller un échange en texte <span>＋</span></summary><textarea value={paste} onChange={event => setPaste(event.target.value)} rows={5} placeholder={"Moi : Salut !\nAutre personne : Coucou, ça va ?"}/><button onClick={() => void importText()} disabled={!paste.trim() || !!busy}>Importer et trouver des réponses ↗</button><small>Une ligne « Moi : » ou « Autre personne : » par message.</small></details>
           {active.messages.length > 0 && <button className="coach-generate" onClick={() => void generate(active)} disabled={!!busy}>{busy === "generate" ? "Réplique réfléchit…" : "Trouver des réponses ↗"}</button>}
@@ -178,6 +207,6 @@ export function HostedWorkspace() {
           <p className="coach-privacy">Vos messages sont analysés pour proposer une réponse. <a href="/confidentialite.html">Comment vos données sont traitées</a></p>
         </> : <div className="coach-empty"><span className="landing-kicker">UN PEU DE RECUL, ÇA AIDE.</span><h2>Les bonnes réponses gardent le fil.</h2><p>Une conversation suivie, des propositions adaptées, et toujours votre décision.</p></div>}</aside>
       </main>}
-    {error && <div className="hosted-toast error" role="alert">{error}<button onClick={() => setError("")} aria-label="Fermer">×</button></div>}{notice && <div className="hosted-toast" role="status">{notice}<button onClick={() => setNotice("")} aria-label="Fermer">×</button></div>}
+    {error && !active && <div className="hosted-toast error" role="alert">{error}<button onClick={() => setError("")} aria-label="Fermer">×</button></div>}{notice && <div className="hosted-toast" role="status">{notice}<button onClick={() => setNotice("")} aria-label="Fermer">×</button></div>}
   </div>;
 }
