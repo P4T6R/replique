@@ -8,6 +8,7 @@ import os
 import sqlite3
 import statistics
 import time
+from contextlib import closing
 from pathlib import Path
 
 OUTCOMES = {"success", "quota", "authorization", "credentials", "configuration",
@@ -33,11 +34,11 @@ def _record(kind: str, provider: str, outcome: str, duration_ms: int) -> bool:
         if path.is_symlink():
             return False
         if not path.exists():
-            descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             os.close(descriptor)
         now = int(time.time())
         table = "generation_events" if kind == "generation" else "ocr_events"
-        with sqlite3.connect(path, timeout=2) as db:
+        with closing(sqlite3.connect(path, timeout=2)) as db, db:
             db.execute(f"CREATE TABLE IF NOT EXISTS {table} ("
                        "created_at INTEGER NOT NULL, provider TEXT NOT NULL, outcome TEXT NOT NULL, duration_ms INTEGER NOT NULL)")
             db.execute(f"DELETE FROM {table} WHERE created_at<?", (now - RETENTION_SECONDS,))
@@ -76,7 +77,7 @@ def report(days: int = 7) -> dict:
         return {**summarize([], days), "ocr": summarize([], days)}
     if path.is_symlink():
         raise ValueError("Metrics database path is unsafe")
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db:
         has_generation = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_events'").fetchone()
         rows = (db.execute("SELECT outcome,duration_ms FROM generation_events WHERE created_at>=?",
                            (int(time.time()) - days * 24 * 3600,)).fetchall() if has_generation else [])

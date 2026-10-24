@@ -78,10 +78,19 @@ async def owner_model() -> tuple[str, str]:
 
 async def generate_text(instructions: str, user_data: str | list[dict]) -> str:
     browser, model = await owner_model()
-    try:
-        return await stream_text(browser, model, instructions, user_data)
-    except (HTTPException, CredentialStoreError) as error:
-        raise unavailable(error) from None
+    for attempt in range(2):
+        try:
+            return await stream_text(browser, model, instructions, user_data)
+        except (HTTPException, CredentialStoreError) as error:
+            # Retry only interrupted or temporarily failed requests. An account
+            # limit or an authorization failure cannot be fixed by retrying.
+            retryable = (isinstance(error, HTTPException) and
+                         (error.status_code >= 500 or error.detail == {"code": "incomplete_response"}))
+            if attempt == 0 and retryable:
+                await asyncio.sleep(0.6)
+                continue
+            raise unavailable(error) from None
+    raise OwnerProviderError("provider")
 
 
 async def check_models() -> list[str]:

@@ -12,6 +12,7 @@ from PIL import Image
 
 from backend.accounts import create_invitation
 from backend.app import app
+from backend.owner_provider import OwnerProviderError
 from backend.test_app import PROVIDER_ANSWER
 
 
@@ -128,6 +129,20 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(response.json()["added"], 2)
         self.assertEqual(len(response.json()["conversation"]["messages"]), 2)
         self.assertEqual(self.other.get(f"/api/conversations/{conversation['id']}").status_code, 404)
+
+    def test_image_import_failure_is_recorded_and_keeps_history_empty(self):
+        conversation = self.create()
+        picture = io.BytesIO()
+        Image.new("RGB", (100, 60), "white").save(picture, format="PNG")
+        url = f"/api/conversations/{conversation['id']}"
+        with patch("backend.app.owner_generate_text", new_callable=AsyncMock,
+                   side_effect=OwnerProviderError("provider")), \
+             patch("backend.app.record_ocr") as metric:
+            response = self.client.post(url + "/import-image", headers=HEADERS,
+                                        files={"file": ("chat.png", picture.getvalue(), "image/png")})
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(metric.call_args.args[:2], ("owner_chatgpt", "provider"))
+        self.assertEqual(self.client.get(url).json()["messages"], [])
 
 
 if __name__ == "__main__":

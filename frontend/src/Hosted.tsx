@@ -94,7 +94,7 @@ export function HostedWorkspace() {
     catch (reason) { setError((reason as Error).message); }
     finally { setBusy(""); }
   }
-  async function generate(conversation: Conversation) {
+  async function generate(conversation: Conversation, afterImageImport = false) {
     setBusy("generate"); setError(""); setNotice("");
     try {
       const result = await api<Suggestions>(`/api/conversations/${conversation.id}/generate`, { method: "POST", headers: jsonHeaders });
@@ -102,7 +102,10 @@ export function HostedWorkspace() {
       show({ ...latest, suggestions: result });
       const status = await api<AccountStatus>("/api/account/status"); setAccount(status);
       await refreshList();
-    } catch (reason) { setError((reason as Error).message); }
+    } catch (reason) {
+      const message = (reason as Error).message;
+      setError(afterImageImport ? `La capture est enregistrée dans cette conversation. Les réponses n’ont pas pu être générées : ${message} Cliquez sur « Trouver des réponses » pour réessayer.` : message);
+    }
     finally { setBusy(""); }
   }
   async function addMessage(body = draft, who = sender, thenGenerate = true) {
@@ -134,7 +137,7 @@ export function HostedWorkspace() {
     try {
       const data = await api<{ added: number; conversation: Conversation }>(`/api/conversations/${active.id}/import-image`, { method: "POST", headers: { "X-Replique-Request": "1" }, body });
       show(data.conversation); await refreshList();
-      if (data.added) await generate(data.conversation);
+      if (data.added) await generate(data.conversation, true);
       else { setNotice("Cette capture n’ajoute aucun nouveau message."); setBusy(""); }
     } catch (reason) { setError((reason as Error).message); setBusy(""); }
     finally { if (fileRef.current) fileRef.current.value = ""; }

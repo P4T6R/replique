@@ -20,7 +20,7 @@ from backend.accounts import create_invitation
 from backend.app import app
 from backend.oauth import Session, load_persistent_session, oauth, save_persistent_session
 from backend.operations import report
-from backend.owner_provider import OwnerProviderError, unavailable
+from backend.owner_provider import OwnerProviderError, unavailable, generate_text
 from backend.test_app import BASE_REQUEST, PROVIDER_ANSWER, image_bytes, heic_bytes
 
 ORIGIN = "https://replique.duckdns.org"
@@ -34,6 +34,29 @@ class OwnerProviderTests(unittest.TestCase):
         classified = unavailable(error)
         self.assertEqual(classified.reason, "quota")
         self.assertEqual(classified.status_code, 503)
+
+    def test_transient_provider_error_is_retried_once(self):
+        async def run():
+            with patch("backend.owner_provider.owner_model", new_callable=AsyncMock,
+                       return_value=("browser", "model")), \
+                 patch("backend.owner_provider.stream_text", new_callable=AsyncMock,
+                       side_effect=[HTTPException(502, {"code": "incomplete_response"}), "OK"]) as stream, \
+                 patch("backend.owner_provider.asyncio.sleep", new_callable=AsyncMock):
+                self.assertEqual(await generate_text("instructions", "ping"), "OK")
+                self.assertEqual(stream.await_count, 2)
+        asyncio.run(run())
+
+    def test_quota_error_is_not_retried(self):
+        async def run():
+            with patch("backend.owner_provider.owner_model", new_callable=AsyncMock,
+                       return_value=("browser", "model")), \
+                 patch("backend.owner_provider.stream_text", new_callable=AsyncMock,
+                       side_effect=HTTPException(429, "quota")) as stream:
+                with self.assertRaises(OwnerProviderError) as raised:
+                    await generate_text("instructions", "ping")
+                self.assertEqual(raised.exception.reason, "quota")
+                self.assertEqual(stream.await_count, 1)
+        asyncio.run(run())
 
     def setUp(self):
         self.private = tempfile.TemporaryDirectory()

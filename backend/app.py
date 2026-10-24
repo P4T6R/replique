@@ -888,23 +888,35 @@ async def import_conversation_image(conversation_id: str, request: Request, file
     try:
         await asyncio.wait_for(local_model_slot.acquire(), timeout=5)
     except asyncio.TimeoutError:
+        record_ocr("owner_chatgpt", "busy", 5000)
         raise HTTPException(503, "La lecture est occupée. Réessayez dans un instant.") from None
+    started = time.monotonic()
+    outcome = "other"
     try:
         content = [{"type": "input_text", "text": "Transcris les bulles visibles et indique leur auteur."},
                    {"type": "input_image", "image_url": image_data, "detail": "high"}]
         answer_text = await owner_generate_text(instructions, content)
+        try:
+            answer = ImportedConversation.model_validate_json(answer_text)
+        except ValidationError:
+            outcome = "invalid_response"
+            raise HTTPException(502, "La capture n'a pas pu être analysée. Essayez une autre capture ou saisissez le dernier message.") from None
+        if not answer.context_clear or not answer.messages:
+            outcome = "unreadable"
+            raise HTTPException(422, "Les messages ou leurs auteurs sont difficiles à lire. Essayez une capture plus nette ou saisissez le texte.")
+        messages = [{"sender": message.sender, "body": clean_text(message.body)} for message in answer.messages]
+        if any(not message["body"] for message in messages):
+            outcome = "unreadable"
+            raise HTTPException(422, "La capture contient un message illisible.")
+        result = import_messages(account_id, conversation_id, revision, messages)
+        outcome = "success"
+        return result
+    except OwnerProviderError as error:
+        outcome = error.reason
+        raise
     finally:
         local_model_slot.release()
-    try:
-        answer = ImportedConversation.model_validate_json(answer_text)
-    except ValidationError:
-        raise HTTPException(502, "La capture n'a pas pu être analysée. Essayez une autre capture ou saisissez le dernier message.") from None
-    if not answer.context_clear or not answer.messages:
-        raise HTTPException(422, "Les messages ou leurs auteurs sont difficiles à lire. Essayez une capture plus nette ou saisissez le texte.")
-    messages = [{"sender": message.sender, "body": clean_text(message.body)} for message in answer.messages]
-    if any(not message["body"] for message in messages):
-        raise HTTPException(422, "La capture contient un message illisible.")
-    return import_messages(account_id, conversation_id, revision, messages)
+        record_ocr("owner_chatgpt", outcome, int((time.monotonic() - started) * 1000))
 
 
 @app.post("/api/generate-image", response_model=GenerateResponse)
